@@ -25,6 +25,7 @@ package main
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	"paepcke.de/ocommit/internal/config"
@@ -61,6 +62,12 @@ func run() int {
 	diffText, err := gitops.StagedDiff(repo, wt)
 	if err != nil {
 		return fail(ui, err)
+	}
+
+	// 3b. Nothing to commit: inform and exit cleanly.
+	if strings.TrimSpace(diffText) == "" {
+		ui.Infof("ocommit: nothing to commit, working tree clean")
+		return 0
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
