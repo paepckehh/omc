@@ -1,0 +1,14 @@
+# Binaries
+/ocommit
+/ocommit.exe
+/ocommit-linux-amd64
+/dist/
+
+# Test artifacts
+/coverage.out
+*.test
+
+# Editor cruft
+*.swp
+.idea/
+.vscode/

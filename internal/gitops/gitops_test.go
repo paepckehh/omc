@@ -1,0 +1,251 @@
+package gitops
+
+import (
+	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/go-git/go-git/v5"
+	"github.com/hiddeco/sshsig"
+	"golang.org/x/crypto/ssh"
+
+	"paepcke.de/ocommit/internal/sign"
+)
+
+// initTestRepo creates a fresh git repository in a temp dir with a configured
+// identity, chdirs there and returns the repo and worktree.
+func initTestRepo(t *testing.T) (*git.Repository, *git.Worktree, string) {
+	t.Helper()
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Configure a deterministic identity so commits have a known author.
+	t.Setenv("GIT_AUTHOR_NAME", "Test User")
+	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.com")
+	t.Setenv("GIT_COMMITTER_NAME", "Test User")
+	t.Setenv("GIT_COMMITTER_EMAIL", "test@example.com")
+
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	return repo, wt, dir
+}
+
+func commitFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCommitCreateWithParent(t *testing.T) {
+	repo, wt, dir := initTestRepo(t)
+	commitFile(t, dir, "a.txt", "hello")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	root, err := Commit(repo, wt, CommitMessage{Subject: "initial"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root.IsZero() {
+		t.Fatal("zero hash")
+	}
+
+	commitFile(t, dir, "a.txt", "changed\n")
+	commitFile(t, dir, "b.txt", "new\n")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Commit(repo, wt, CommitMessage{Subject: "second", Body: "details"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head.Hash() != second {
+		t.Errorf("HEAD = %s, want %s", head.Hash(), second)
+	}
+
+	obj, err := repo.CommitObject(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(obj.ParentHashes) != 1 || obj.ParentHashes[0] != root {
+		t.Errorf("parents = %v, want [%s]", obj.ParentHashes, root)
+	}
+}
+
+func TestCommitRootNoParent(t *testing.T) {
+	repo, wt, dir := initTestRepo(t)
+	commitFile(t, dir, "x.txt", "x")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := Commit(repo, wt, CommitMessage{Subject: "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := repo.CommitObject(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.ParentHashes) != 0 {
+		t.Errorf("root commit has parents: %v", c.ParentHashes)
+	}
+}
+
+func TestOpenFindParentRepo(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "sub", "dir")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git.PlainInit(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(sub); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := Open()
+	if err != nil {
+		t.Fatalf("Open() from subdir: %v", err)
+	}
+}
+
+func TestOpenOutsideRepo(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Open(); err != ErrNotARepository {
+		t.Fatalf("got %v, want ErrNotARepository", err)
+	}
+}
+
+func TestStagedDiff(t *testing.T) {
+	repo, wt, dir := initTestRepo(t)
+	commitFile(t, dir, "hello.txt", "hello\n")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(repo, wt, CommitMessage{Subject: "initial"}); err != nil {
+		t.Fatal(err)
+	}
+
+	commitFile(t, dir, "hello.txt", "hello world\n")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	diff, err := StagedDiff(repo, wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diff, "hello.txt") {
+		t.Errorf("diff missing file name: %q", diff)
+	}
+	if !strings.Contains(diff, "+hello world") {
+		t.Errorf("diff missing added line: %q", diff)
+	}
+}
+
+func TestLogFormat(t *testing.T) {
+	repo, wt, dir := initTestRepo(t)
+	commitFile(t, dir, "a.txt", "a")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(repo, wt, CommitMessage{Subject: "First commit"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := Log(repo, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "First commit") {
+		t.Errorf("log missing subject: %q", out)
+	}
+}
+
+// TestSignedCommitRoundTrip signs a commit and verifies the SSH signature
+// programmatically against the payload (commit without signature header).
+func TestSignedCommitRoundTrip(t *testing.T) {
+	repo, wt, dir := initTestRepo(t)
+	commitFile(t, dir, "signed.txt", "signed content\n")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, privEd, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPriv, err := ssh.NewSignerFromKey(privEd)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := SignedCommit(repo, wt, CommitMessage{Subject: "signed"}, func(payload []byte) ([]byte, error) {
+		sig, err := sshsig.Sign(strings.NewReader(string(payload)), sshPriv, sign.HashAlgorithm, sign.Namespace)
+		if err != nil {
+			return nil, err
+		}
+		return sshsig.Armor(sig), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	obj, err := repo.CommitObject(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obj.PGPSignature == "" {
+		t.Fatal("expected PGPSignature set")
+	}
+	if !strings.Contains(obj.PGPSignature, "BEGIN SSH SIGNATURE") {
+		t.Errorf("signature not armored: %q", obj.PGPSignature)
+	}
+
+	// Payload for verification = exactly what SignedCommit signed: the
+	// headers-only block (tree, parents, author, committer), no message.
+	var payload bytes.Buffer
+	fmt.Fprintf(&payload, "tree %s\n", obj.TreeHash)
+	for _, p := range obj.ParentHashes {
+		fmt.Fprintf(&payload, "parent %s\n", p)
+	}
+	payload.WriteString("author ")
+	if err := obj.Author.Encode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	payload.WriteString("\ncommitter ")
+	if err := obj.Committer.Encode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	payload.WriteString("\n")
+
+	sig, err := sshsig.Unarmor([]byte(obj.PGPSignature))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sshsig.Verify(
+		strings.NewReader(payload.String()), sig,
+		sshPriv.PublicKey(), sign.HashAlgorithm, sign.Namespace,
+	); err != nil {
+		t.Fatalf("verify signature: %v", err)
+	}
+}

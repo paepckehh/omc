@@ -1,0 +1,31 @@
+package config
+
+import "testing"
+
+func TestFromEnv(t *testing.T) {
+	t.Setenv("OCOMMIT_KEY_PATH", "/keys/id_ed25519")
+	t.Setenv("OLLAMA_DESC_URL", "http://127.0.0.1:11434")
+	t.Setenv("OLLAMA_DESC_MODEL", "qwen2.5:7b")
+
+	c := FromEnv()
+	if c.KeyPath != "/keys/id_ed25519" {
+		t.Errorf("KeyPath = %q, want /keys/id_ed25519", c.KeyPath)
+	}
+	if c.OllamaURL != "http://127.0.0.1:11434" {
+		t.Errorf("OllamaURL = %q, want http://127.0.0.1:11434", c.OllamaURL)
+	}
+	if c.OllamaModel != "qwen2.5:7b" {
+		t.Errorf("OllamaModel = %q, want qwen2.5:7b", c.OllamaModel)
+	}
+}
+
+func TestFromEnvEmpty(t *testing.T) {
+	t.Setenv("OCOMMIT_KEY_PATH", "")
+	t.Setenv("OLLAMA_DESC_URL", "")
+	t.Setenv("OLLAMA_DESC_MODEL", "")
+
+	c := FromEnv()
+	if c.KeyPath != "" || c.OllamaURL != "" || c.OllamaModel != "" {
+		t.Errorf("expected all empty, got %+v", c)
+	}
+}
