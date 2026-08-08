@@ -9,7 +9,8 @@ import "os"
 // Config is the full runtime configuration derived from the environment.
 type Config struct {
 	// KeyPath points at an SSH private key used to sign the commit.
-	// Optional: empty disables signing.
+	// Optional: empty disables signing. When set but unusable, ocommit
+	// logs a warning and commits without signing.
 	KeyPath string
 	// OllamaURL is the base URL of a local Ollama REST API, e.g.
 	// http://127.0.0.1:11434. Optional: empty disables AI messages.
@@ -17,6 +18,12 @@ type Config struct {
 	// OllamaModel selects the model hosted by Ollama. Optional; the
 	// server's default model is used when empty.
 	OllamaModel string
+	// Name is the commit author/committer name. Optional; falls back to
+	// the repository's git config and then a built-in default.
+	Name string
+	// Email is the commit author/committer email. Same fallback chain
+	// as Name.
+	Email string
 }
 
 // FromEnv loads the configuration from the process environment.
@@ -25,5 +32,7 @@ func FromEnv() Config {
 		KeyPath:     os.Getenv("OCOMMIT_KEY_PATH"),
 		OllamaURL:   os.Getenv("OLLAMA_DESC_URL"),
 		OllamaModel: os.Getenv("OLLAMA_DESC_MODEL"),
+		Name:        os.Getenv("OCOMMIT_NAME"),
+		Email:       os.Getenv("OCOMMIT_EMAIL"),
 	}
 }

@@ -181,6 +181,76 @@ func TestLogFormat(t *testing.T) {
 	}
 }
 
+func TestResolveIdentityPriority(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := repo.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.User.Name = "Git Config User"
+	cfg.User.Email = "config@example.com"
+	if err := repo.SetConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("oconfig env wins", func(t *testing.T) {
+		t.Setenv("OCOMMIT_NAME", "Env User")
+		t.Setenv("OCOMMIT_EMAIL", "env@example.com")
+		t.Setenv("GIT_AUTHOR_NAME", "")
+		t.Setenv("GIT_AUTHOR_EMAIL", "")
+		t.Setenv("GIT_COMMITTER_NAME", "")
+		t.Setenv("GIT_COMMITTER_EMAIL", "")
+		id := ResolveIdentity(repo)
+		if id.Name != "Env User" || id.Email != "env@example.com" {
+			t.Errorf("got %+v, want env identity", id)
+		}
+	})
+
+	t.Run("git author env wins over config", func(t *testing.T) {
+		t.Setenv("OCOMMIT_NAME", "")
+		t.Setenv("OCOMMIT_EMAIL", "")
+		t.Setenv("GIT_AUTHOR_NAME", "Git Author")
+		t.Setenv("GIT_AUTHOR_EMAIL", "author@example.com")
+		id := ResolveIdentity(repo)
+		if id.Name != "Git Author" || id.Email != "author@example.com" {
+			t.Errorf("got %+v, want git author identity", id)
+		}
+	})
+
+	t.Run("repo config fallback", func(t *testing.T) {
+		t.Setenv("OCOMMIT_NAME", "")
+		t.Setenv("OCOMMIT_EMAIL", "")
+		t.Setenv("GIT_AUTHOR_NAME", "")
+		t.Setenv("GIT_AUTHOR_EMAIL", "")
+		t.Setenv("GIT_COMMITTER_NAME", "")
+		t.Setenv("GIT_COMMITTER_EMAIL", "")
+		id := ResolveIdentity(repo)
+		if id.Name != "Git Config User" || id.Email != "config@example.com" {
+			t.Errorf("got %+v, want repo config identity", id)
+		}
+	})
+
+	t.Run("defaults without config", func(t *testing.T) {
+		t.Setenv("OCOMMIT_NAME", "")
+		t.Setenv("OCOMMIT_EMAIL", "")
+		t.Setenv("GIT_AUTHOR_NAME", "")
+		t.Setenv("GIT_AUTHOR_EMAIL", "")
+		t.Setenv("GIT_COMMITTER_NAME", "")
+		t.Setenv("GIT_COMMITTER_EMAIL", "")
+		id := ResolveIdentity(nil)
+		if id.Name != DefaultName || id.Email != DefaultEmail {
+			t.Errorf("got %+v, want defaults %q <%s>", id, DefaultName, DefaultEmail)
+		}
+	})
+}
+
 // TestSignedCommitRoundTrip signs a commit and verifies the SSH signature
 // programmatically against the payload (commit without signature header).
 func TestSignedCommitRoundTrip(t *testing.T) {

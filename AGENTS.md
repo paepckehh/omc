@@ -16,24 +16,25 @@ instance.
 ## Hard constraints
 
 - **No CLI flags.** All configuration comes from the environment:
-  `OCOMMIT_KEY_PATH`, `OLLAMA_DESC_URL`, `OLLAMA_DESC_MODEL`.
+  `OCOMMIT_KEY_PATH`, `OLLAMA_DESC_URL`, `OLLAMA_DESC_MODEL`,
+  `OCOMMIT_NAME`, `OCOMMIT_EMAIL`.
 - **No runtime dependency on external binaries.** No `git`, no `ssh-keygen`.
   Everything uses libraries: `github.com/go-git/go-git/v5` for repository
   operations, `github.com/hiddeco/sshsig` + `golang.org/x/crypto/ssh` for
   SSH signing.
 - **Always degrade, never block.** If Ollama is unreachable or the LLM call
   fails, fall back to the default subject `update` and continue. If the key
-  file is missing/invalid when configured, that is a hard error (user asked
-  for signing). Not being in a repo is an error.
+  file is missing/invalid when configured, log a warning and commit
+  unsigned. Not being in a repo is an error.
 - **Pure Go, single static binary.** Any new dependency must be pure Go.
 
 ## Where things live
 
 ```
 cmd/ocommit/main.go   pipeline: repo → stage → diff → (ollama) → (sign) → commit → log
-internal/config/      config.FromEnv() reads the three env vars
+internal/config/      config.FromEnv() reads the five env vars
 internal/gitops/      PlainOpen detection, StageAll, StagedDiff, Commit,
-                      SignedCommit, Log, index→tree writer
+                      SignedCommit, Log, ResolveIdentity, index→tree writer
 internal/sign/        sign.Load(keyPath), signer.Sign(payload) → armored SSH sig
 internal/ollama/      Client.Available(), DescribeDetail(), SummarizeTLDR()
 internal/output/      UI: stdout = results, stderr = diagnostics
@@ -59,16 +60,26 @@ The final message is:
 
 | Variable            | Meaning                                              | Behavior if set but broken                |
 | ------------------- | ---------------------------------------------------- | ----------------------------------------- |
-| `OCOMMIT_KEY_PATH`  | Path to SSH private key                              | Hard error; abort before committing       |
+| `OCOMMIT_KEY_PATH`  | Path to SSH private key                              | Warn, commit unsigned                     |
 | `OLLAMA_DESC_URL`   | Base URL of local Ollama REST API                    | Warn and use default `update` subject     |
 | `OLLAMA_DESC_MODEL` | Ollama model name (optional, default `llama3.2`)     | Default used                              |
+| `OCOMMIT_NAME`      | Commit author/committer name (optional)              | Falls back to git config, then default    |
+| `OCOMMIT_EMAIL`     | Commit author/committer email (optional)             | Falls back to git config, then default    |
 
 ## Git identity
 
-`internal/gitops.signature()` reads `GIT_AUTHOR_*` / `GIT_COMMITTER_*` env
-vars and falls back to `ocommit <ocommit@localhost>`. It does NOT read git
-config; keep it that way unless a change explicitly requires config files
-(maintaining zero-runtime-dependency on git is the priority).
+`internal/gitops.ResolveIdentity()` resolves the commit identity in this
+order:
+
+1. `OCOMMIT_NAME` / `OCOMMIT_EMAIL` (ocommit's own variables)
+2. `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` then `GIT_COMMITTER_*` (standard git
+   variables)
+3. `user.name` / `user.email` from the repository's git config (read via
+   go-git, no external binary)
+4. Defaults: `OCOMMIT, Git Commiter <git@ocommit.local>`
+
+Environment always wins over git config. Config files are only consulted
+for the identity fallback; nothing else depends on them.
 
 ## Worktree/OS notes
 

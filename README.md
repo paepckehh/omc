@@ -32,11 +32,16 @@ directly.
   process at runtime.
 - **SSH-signed commits** — set `OCOMMIT_KEY_PATH` to an SSH private key and
   the commit is signed in git's SSH signing format (`BEGIN SSH SIGNATURE`),
-  the same format `git commit -S` with an SSH key produces.
+  the same format `git commit -S` with an SSH key produces. If the key is
+  configured but unusable, ocommit logs a warning and commits unsigned.
 - **AI commit messages** — point `OLLAMA_DESC_URL` at a local Ollama and the
   staged diff is sent to the model twice: once to write a detailed commit
   description, once to condense it into a one-line TL;DR used as the commit
   subject.
+- **Flexible identity** — `OCOMMIT_NAME`/`OCOMMIT_EMAIL` set the author and
+  committer explicitly; otherwise the standard `GIT_AUTHOR_*`/
+  `GIT_COMMITTER_*` variables, then the repository's git config, then
+  `OCOMMIT, Git Commiter <git@ocommit.local>`.
 - **Always succeeds** — if no repo is found, or Ollama is unreachable, or no
   signing key is configured, ocommit still does the right, minimal thing.
 
@@ -82,13 +87,16 @@ variables:
 
 | Variable             | Effect                                                            |
 | -------------------- | ----------------------------------------------------------------- |
-| `OCOMMIT_KEY_PATH`   | Path to an SSH **private** key. When set and valid, the commit is SSH-signed. |
+| `OCOMMIT_KEY_PATH`   | Path to an SSH **private** key. When set and valid, the commit is SSH-signed. If set but unusable, warns and commits unsigned. |
 | `OLLAMA_DESC_URL`    | Base URL of a local Ollama REST API, e.g. `http://127.0.0.1:11434`. When set and reachable, generates the commit message from the staged diff. |
 | `OLLAMA_DESC_MODEL`  | Ollama model name to use (optional). Defaults to `llama3.2`.      |
+| `OCOMMIT_NAME`       | Commit author/committer name (optional). Falls back to git config, then `OCOMMIT, Git Commiter`. |
+| `OCOMMIT_EMAIL`      | Commit author/committer email (optional). Falls back to git config, then `git@ocommit.local`. |
 
 > Signing: only passphrase-less keys are supported (there is no interactive
 > prompt, by design). `ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ocommit` is
-> your friend.
+> your friend. A missing or invalid key at the configured path never blocks a
+> commit: ocommit logs the problem and proceeds unsigned.
 
 ### AI message flow
 

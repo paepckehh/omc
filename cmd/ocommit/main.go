@@ -5,7 +5,13 @@
 // Behaviors (all opt-in via env):
 //
 //	OCOMMIT_KEY_PATH   path to an SSH private key; if set and valid, the
-//	                   commit is signed with it (git's SSH signing format)
+//	                   commit is signed with it (git's SSH signing format).
+//	                   If set but unusable, ocommit logs a warning and
+//	                   commits unsigned.
+//	OCOMMIT_NAME       commit author/committer name; falls back to git
+//	                   config, then "OCOMMIT, Git Commiter"
+//	OCOMMIT_EMAIL      commit author/committer email; falls back to git
+//	                   config, then "git@ocommit.local"
 //	OLLAMA_DESC_URL    base URL of a local Ollama REST API; if set and
 //	                   reachable, the staged diff is turned into an LLM
 //	                   commit message (detailed body + TL;DR subject)
@@ -18,7 +24,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"time"
 
@@ -81,20 +86,25 @@ func run() int {
 	if cfg.KeyPath != "" {
 		signer, err = sign.Load(cfg.KeyPath)
 		if err != nil {
-			return fail(ui, fmt.Errorf("ssh key: %w", err))
+			// The user asked for signing but the key cannot be used:
+			// degrade to an unsigned commit and record why.
+			ui.Infof("ocommit: warning: ssh key %s unusable (%v); committing unsigned", cfg.KeyPath, err)
+			signer = nil
+		} else {
+			ui.Infof("ocommit: signing commit with ssh key %s", cfg.KeyPath)
 		}
-		ui.Infof("ocommit: signing commit with ssh key %s", cfg.KeyPath)
 	}
 
 	// 6. Create the commit, signing it when a key is available.
+	id := gitops.ResolveIdentity(repo)
 	var hash plumbing.Hash
 	if signer != nil {
-		ui.Infof("ocommit: committing (signed)")
+		ui.Infof("ocommit: committing (as %s <%s>, signed)", id.Name, id.Email)
 		hash, err = gitops.SignedCommit(repo, wt, msg, func(payload []byte) ([]byte, error) {
 			return signer.Sign(payload)
 		})
 	} else {
-		ui.Infof("ocommit: committing")
+		ui.Infof("ocommit: committing (as %s <%s>)", id.Name, id.Email)
 		hash, err = gitops.Commit(repo, wt, msg)
 	}
 	if err != nil {

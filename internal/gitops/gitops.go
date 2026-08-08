@@ -103,6 +103,72 @@ type CommitMessage struct {
 	Body string
 }
 
+// defaults for the commit identity when nothing else is configured.
+const (
+	DefaultName  = "OCOMMIT, Git Commiter"
+	DefaultEmail = "git@ocommit.local"
+)
+
+// Identity is the resolved author/committer for a commit.
+type Identity struct {
+	Name  string
+	Email string
+}
+
+// ResolveIdentity returns the commit identity: OCOMMIT_NAME/OCOMMIT_EMAIL
+// first, then the standard GIT_AUTHOR_*/GIT_COMMITTER_* variables, then the
+// repository's git config, and finally the built-in defaults.
+func ResolveIdentity(repo *git.Repository) Identity {
+	return identity(repo)
+}
+
+// identity reads the identity from the environment and, failing that, from
+// the repository's git config, and finally falls back to fixed defaults.
+func identity(repo *git.Repository) Identity {
+	sig := Identity{Name: DefaultName, Email: DefaultEmail}
+	nameEnv := envOr("OCOMMIT_NAME", "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME")
+	emailEnv := envOr("OCOMMIT_EMAIL", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL")
+	if nameEnv != "" {
+		sig.Name = nameEnv
+	}
+	if emailEnv != "" {
+		sig.Email = emailEnv
+	}
+	// Fall back to the repo's git config only when no environment variable
+	// configured the identity; env always wins.
+	if repo != nil && (nameEnv == "" || emailEnv == "") {
+		if cfg, err := repo.Config(); err == nil {
+			if nameEnv == "" && cfg.User.Name != "" {
+				sig.Name = cfg.User.Name
+			}
+			if emailEnv == "" && cfg.User.Email != "" {
+				sig.Email = cfg.User.Email
+			}
+		}
+	}
+	return sig
+}
+
+// envOr returns the first non-empty environment variable among keys.
+func envOr(keys ...string) string {
+	for _, k := range keys {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// signature builds the committer/author object from the resolved identity.
+func signature(repo *git.Repository) object.Signature {
+	id := identity(repo)
+	return object.Signature{
+		Name:  id.Name,
+		Email: id.Email,
+		When:  time.Now(),
+	}
+}
+
 // String renders the canonical commit message text.
 func (m CommitMessage) String() string {
 	s := strings.TrimSpace(m.Subject)
@@ -142,7 +208,7 @@ func Commit(repo *git.Repository, wt *git.Worktree, msg CommitMessage) (plumbing
 		return plumbing.ZeroHash, fmt.Errorf("read HEAD: %w", err)
 	}
 
-	sig := signature()
+	sig := signature(repo)
 	commit := &object.Commit{
 		Author:       sig,
 		Committer:    sig,
@@ -196,7 +262,7 @@ func SignedCommit(repo *git.Repository, wt *git.Worktree, msg CommitMessage, arm
 		return plumbing.ZeroHash, fmt.Errorf("read HEAD: %w", err)
 	}
 
-	sig := signature()
+	sig := signature(repo)
 	// Header block: identical to what git signs for a signed commit.
 	var headers bytes.Buffer
 	fmt.Fprintf(&headers, "tree %s\n", treeHash)
@@ -287,33 +353,6 @@ func Log(repo *git.Repository, limit int) (string, error) {
 		return "", fmt.Errorf("iterate log: %w", err)
 	}
 	return out.String(), nil
-}
-
-// signature builds the committer/author identity. It reads the standard git
-// identity environment variables and falls back to a deterministic default
-// so first commits always have a well-formed identity.
-func signature() object.Signature {
-	sig := object.Signature{
-		Name:  "ocommit",
-		Email: "ocommit@localhost",
-		When:  time.Now(),
-	}
-	if v := envOr("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"); v != "" {
-		sig.Name = v
-	}
-	if v := envOr("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"); v != "" {
-		sig.Email = v
-	}
-	return sig
-}
-
-func envOr(keys ...string) string {
-	for _, k := range keys {
-		if v := os.Getenv(k); v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // advanceBranch moves the current branch (or detached HEAD) to the new
