@@ -150,7 +150,7 @@ func TestStagedDiff(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	diff, err := StagedDiff(repo, wt)
+	diff, files, err := StagedDiff(repo, wt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,6 +159,11 @@ func TestStagedDiff(t *testing.T) {
 	}
 	if !strings.Contains(diff, "+hello world") {
 		t.Errorf("diff missing added line: %q", diff)
+	}
+	if len(files) == 0 {
+		t.Errorf("expected at least one changed file, got %v", files)
+	} else if files[0] != "hello.txt" {
+		t.Errorf("files[0] = %q, want hello.txt", files[0])
 	}
 }
 

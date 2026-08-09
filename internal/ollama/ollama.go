@@ -13,8 +13,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // DefaultModel is used when OLLAMA_DESC_MODEL is empty.
@@ -51,6 +49,7 @@ func (c *Client) Available(ctx context.Context) bool {
 		return false
 	}
 	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode == http.StatusOK
 }
 
@@ -112,23 +111,4 @@ func (c *Client) chat(ctx context.Context, prompt string) (string, error) {
 		return "", fmt.Errorf("parse response: %w", err)
 	}
 	return strings.TrimSpace(out.Response), nil
-}
-
-// DiffStat renders a one-line summary of the changes for prompt context.
-func DiffStat(changes []*object.Change) string {
-	var stats []string
-	for _, ch := range changes {
-		if ch == nil {
-			continue
-		}
-		name := ch.To.Name
-		if name == "" {
-			name = ch.From.Name
-		}
-		stats = append(stats, "  - "+name)
-	}
-	if len(stats) == 0 {
-		return "(no file changes)"
-	}
-	return strings.Join(stats, "\n")
 }

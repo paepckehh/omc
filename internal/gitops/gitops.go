@@ -55,28 +55,29 @@ func StageAll(wt *git.Worktree) error {
 
 // StagedDiff returns the patch text that will be committed: the difference
 // between HEAD's tree and the current index, as a unified diff. On the root
-// commit the diff covers the full tree.
-func StagedDiff(repo *git.Repository, wt *git.Worktree) (string, error) {
+// commit the diff covers the full tree. The returned fileNames slice lists
+// the paths touched (post-rename names), suitable as a compact summary for
+// an LLM prompt; it is empty when nothing changed.
+func StagedDiff(repo *git.Repository, wt *git.Worktree) (diff string, fileNames []string, err error) {
 	var from *object.Tree
-	if ref, err := repo.Head(); err == nil {
-		c, err := repo.CommitObject(ref.Hash())
-		if err != nil {
-			return "", fmt.Errorf("read HEAD commit: %w", err)
+	if ref, e := repo.Head(); e == nil {
+		c, e := repo.CommitObject(ref.Hash())
+		if e != nil {
+			return "", nil, fmt.Errorf("read HEAD commit: %w", e)
 		}
-		from, err = c.Tree()
-		if err != nil {
-			return "", fmt.Errorf("read HEAD tree: %w", err)
+		from, e = c.Tree()
+		if e != nil {
+			return "", nil, fmt.Errorf("read HEAD tree: %w", e)
 		}
 	}
 
-	toRaw := &object.Tree{}
-	toHash, err := buildIndexTree(repo, toRaw)
+	toHash, err := writeIndexTree(repo)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	to, err := repo.TreeObject(toHash)
 	if err != nil {
-		return "", fmt.Errorf("read index tree: %w", err)
+		return "", nil, fmt.Errorf("read index tree: %w", err)
 	}
 
 	changes, err := object.DiffTreeWithOptions(
@@ -84,14 +85,26 @@ func StagedDiff(repo *git.Repository, wt *git.Worktree) (string, error) {
 		&object.DiffTreeOptions{DetectRenames: true},
 	)
 	if err != nil {
-		return "", fmt.Errorf("diff HEAD against index: %w", err)
+		return "", nil, fmt.Errorf("diff HEAD against index: %w", err)
 	}
 
 	patch, err := changes.Patch()
 	if err != nil {
-		return "", fmt.Errorf("build patch: %w", err)
+		return "", nil, fmt.Errorf("build patch: %w", err)
 	}
-	return patch.String(), nil
+	for _, ch := range changes {
+		if ch == nil {
+			continue
+		}
+		name := ch.To.Name
+		if name == "" {
+			name = ch.From.Name
+		}
+		if name != "" {
+			fileNames = append(fileNames, name)
+		}
+	}
+	return patch.String(), fileNames, nil
 }
 
 // CommitMessage holds the final subject and body of a commit. The subject is
@@ -159,9 +172,8 @@ func envOr(keys ...string) string {
 	return ""
 }
 
-// signature builds the committer/author object from the resolved identity.
-func signature(repo *git.Repository) object.Signature {
-	id := identity(repo)
+// signature builds an author/committer signature from a resolved identity.
+func signatureFrom(id Identity) object.Signature {
 	return object.Signature{
 		Name:  id.Name,
 		Email: id.Email,
@@ -183,36 +195,47 @@ func (m CommitMessage) String() string {
 	}
 }
 
+// commitSubject returns the canonical message, falling back to "update" when
+// the resolved message is empty.
+func (m CommitMessage) commitSubject() string {
+	if s := m.String(); s != "" {
+		return s
+	}
+	return "update"
+}
+
+// parentsOf returns the parent commit hashes for a new commit: HEAD's hash
+// when the repository already has history, or none for the root commit.
+func parentsOf(repo *git.Repository) ([]plumbing.Hash, error) {
+	head, err := repo.Head()
+	switch err {
+	case nil:
+		return []plumbing.Hash{head.Hash()}, nil
+	case plumbing.ErrReferenceNotFound:
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("read HEAD: %w", err)
+	}
+}
+
 // Commit creates a new commit from the current index, using the given
 // message, and advances the current branch. It returns the new commit's
 // hash. When msg is empty the subject falls back to "update".
 func Commit(repo *git.Repository, wt *git.Worktree, msg CommitMessage) (plumbing.Hash, error) {
-	message := msg.String()
-	if message == "" {
-		message = "update"
-	}
-
-	treeHash := plumbing.ZeroHash
-	if h, err := writeIndexTree(repo); err != nil {
+	treeHash, err := writeIndexTree(repo)
+	if err != nil {
 		return plumbing.ZeroHash, err
-	} else {
-		treeHash = h
+	}
+	parents, err := parentsOf(repo)
+	if err != nil {
+		return plumbing.ZeroHash, err
 	}
 
-	parents := []plumbing.Hash{}
-	head, err := repo.Head()
-	switch {
-	case err == nil:
-		parents = append(parents, head.Hash())
-	case err != plumbing.ErrReferenceNotFound:
-		return plumbing.ZeroHash, fmt.Errorf("read HEAD: %w", err)
-	}
-
-	sig := signature(repo)
+	sig := signatureFrom(identity(repo))
 	commit := &object.Commit{
 		Author:       sig,
 		Committer:    sig,
-		Message:      message,
+		Message:      msg.commitSubject(),
 		TreeHash:     treeHash,
 		ParentHashes: parents,
 	}
@@ -238,31 +261,17 @@ func Commit(repo *git.Repository, wt *git.Worktree, msg CommitMessage) (plumbing
 // header bytes git signs (tree/parent/author/committer lines); the message
 // is not part of the signed payload, just as in git.
 func SignedCommit(repo *git.Repository, wt *git.Worktree, msg CommitMessage, armoredSign func([]byte) ([]byte, error)) (plumbing.Hash, error) {
-	message := msg.String()
-	if message == "" {
-		message = "update"
-	}
-	if !strings.HasSuffix(message, "\n") {
-		message += "\n"
-	}
-
-	treeHash := plumbing.ZeroHash
-	if h, err := writeIndexTree(repo); err != nil {
+	treeHash, err := writeIndexTree(repo)
+	if err != nil {
 		return plumbing.ZeroHash, err
-	} else {
-		treeHash = h
+	}
+	parents, err := parentsOf(repo)
+	if err != nil {
+		return plumbing.ZeroHash, err
 	}
 
-	parents := []plumbing.Hash{}
-	head, err := repo.Head()
-	switch {
-	case err == nil:
-		parents = append(parents, head.Hash())
-	case err != plumbing.ErrReferenceNotFound:
-		return plumbing.ZeroHash, fmt.Errorf("read HEAD: %w", err)
-	}
+	sig := signatureFrom(identity(repo))
 
-	sig := signature(repo)
 	// Header block: identical to what git signs for a signed commit.
 	var headers bytes.Buffer
 	fmt.Fprintf(&headers, "tree %s\n", treeHash)
@@ -286,7 +295,13 @@ func SignedCommit(repo *git.Repository, wt *git.Worktree, msg CommitMessage, arm
 	}
 
 	// Stored object: headers, then "gpgsig" + armor with continuation
-	// spaces on every line, then blank line, then the message.
+	// spaces on every line, then blank line, then the message. git requires
+	// the commit body to end with a newline.
+	message := msg.commitSubject()
+	if !strings.HasSuffix(message, "\n") {
+		message += "\n"
+	}
+
 	var final strings.Builder
 	final.WriteString(payload)
 	armor := strings.TrimSuffix(string(armored), "\n")
@@ -343,7 +358,7 @@ func Log(repo *git.Repository, limit int) (string, error) {
 		first, _, _ := strings.Cut(c.Message, "\n")
 		fmt.Fprintf(&out, "%s  %s <%s>  %s\n",
 			short, c.Author.Name, c.Author.Email, c.Author.When.Format("2006-01-02"))
-		out.WriteString("    " + first + "\n")
+		fmt.Fprintf(&out, "    %s\n", first)
 		if c.PGPSignature != "" {
 			out.WriteString("    signed: yes\n")
 		}
@@ -367,13 +382,6 @@ func advanceBranch(repo *git.Repository, hash plumbing.Hash) error {
 		return repo.Storer.SetReference(plumbing.NewHashReference(plumbing.HEAD, hash))
 	}
 	return repo.Storer.SetReference(plumbing.NewHashReference(head.Target(), hash))
-}
-
-// buildIndexTree is kept as a small wrapper that writes the current index
-// as a tree object and returns its hash; it exists so callers can name the
-// operation readably.
-func buildIndexTree(repo *git.Repository, _ *object.Tree) (plumbing.Hash, error) {
-	return writeIndexTree(repo)
 }
 
 // writeIndexTree writes a tree object matching the current index to the
@@ -413,7 +421,7 @@ func writeIndexTree(repo *git.Repository) (plumbing.Hash, error) {
 	var kids []*indexNode
 	topLevel := map[string]bool{}
 	for _, e := range idx.Entries {
-		first := strings.SplitN(e.Name, "/", 2)[0]
+		first, _, _ := strings.Cut(e.Name, "/")
 		if !topLevel[first] {
 			topLevel[first] = true
 			kids = append(kids, nodes[first])

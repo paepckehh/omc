@@ -59,7 +59,7 @@ func run() int {
 
 	// 3. Build the staged diff for the LLM and for the user.
 	ui.Infof("ocommit: reading staged diff")
-	diffText, err := gitops.StagedDiff(repo, wt)
+	diffText, files, err := gitops.StagedDiff(repo, wt)
 	if err != nil {
 		return fail(ui, err)
 	}
@@ -79,7 +79,7 @@ func run() int {
 		client := ollama.New(cfg.OllamaURL, cfg.OllamaModel)
 		if client.Available(ctx) {
 			ui.Infof("ocommit: ollama reachable at %s, generating commit message", cfg.OllamaURL)
-			if msg, err = generateMessage(ctx, client, diffText); err != nil {
+			if msg, err = generateMessage(ctx, client, diffText, files); err != nil {
 				ui.Infof("ocommit: warning: llm message generation failed: %v", err)
 				msg = gitops.CommitMessage{Subject: "update"}
 			}
@@ -128,9 +128,23 @@ func run() int {
 }
 
 // generateMessage performs the two-step LLM conversation: detailed
-// description, then TL;DR summary used as the commit subject.
-func generateMessage(ctx context.Context, client *ollama.Client, diff string) (gitops.CommitMessage, error) {
-	detail, err := client.DescribeDetail(ctx, diff, diff)
+// description, then TL;DR summary used as the commit subject. files is the
+// list of changed paths, used as a compact summary so the model can ground
+// its message in the file names without re-reading the whole diff twice.
+func generateMessage(ctx context.Context, client *ollama.Client, diff string, files []string) (gitops.CommitMessage, error) {
+	stat := "(no file changes)"
+	if len(files) > 0 {
+		var b strings.Builder
+		for i, f := range files {
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString("  - ")
+			b.WriteString(f)
+		}
+		stat = b.String()
+	}
+	detail, err := client.DescribeDetail(ctx, diff, stat)
 	if err != nil {
 		return gitops.CommitMessage{}, err
 	}
