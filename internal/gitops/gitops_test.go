@@ -324,3 +324,182 @@ func TestSignedCommitRoundTrip(t *testing.T) {
 		t.Fatalf("verify signature: %v", err)
 	}
 }
+
+// --- semver tag tests --------------------------------------------------------
+
+func TestNextSemverTag(t *testing.T) {
+	cases := []struct {
+		latest, want string
+	}{
+		{"", "v0.0.1"},
+		{"v0.0.1", "v0.0.2"},
+		{"v1.2.3", "v1.2.4"},
+		{"v10.20.30", "v10.20.31"},
+		{"v0.1.0", "v0.1.1"},
+		{"v2.0.0", "v2.0.1"},
+		{"not-a-tag", "v0.0.1"},
+		{"v1.2.3-rc.1", "v1.2.4"},
+		{"1.2.3", "v1.2.4"},
+	}
+	for _, c := range cases {
+		got := NextSemverTag(c.latest)
+		if got != c.want {
+			t.Errorf("NextSemverTag(%q) = %q, want %q", c.latest, got, c.want)
+		}
+	}
+}
+
+func TestLatestSemverTagEmpty(t *testing.T) {
+	repo, _, _ := initTestRepo(t)
+	got, err := LatestSemverTag(repo)
+	if err != nil {
+		t.Fatalf("LatestSemverTag: %v", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty (no tags in fresh repo)", got)
+	}
+}
+
+func TestLatestSemverTagFindsHighest(t *testing.T) {
+	repo, wt, dir := initTestRepo(t)
+	commitFile(t, dir, "a.txt", "a")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := Commit(repo, wt, CommitMessage{Subject: "init"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{Name: "Tagger", Email: "tag@example.com"}
+	for _, name := range []string{"v0.1.0", "v0.0.5", "v1.0.0", "v0.10.0", "notsemver", "v0.1.0-rc.1"} {
+		if _, err := CreateTag(repo, h, name, "msg", id); err != nil {
+			t.Fatalf("CreateTag(%s): %v", name, err)
+		}
+	}
+	got, err := LatestSemverTag(repo)
+	if err != nil {
+		t.Fatalf("LatestSemverTag: %v", err)
+	}
+	if got != "v1.0.0" {
+		t.Errorf("got %q, want v1.0.0", got)
+	}
+}
+
+func TestCreateTagAnnotated(t *testing.T) {
+	repo, wt, dir := initTestRepo(t)
+	commitFile(t, dir, "a.txt", "a")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := Commit(repo, wt, CommitMessage{Subject: "init"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{Name: "Tagger", Email: "tag@example.com"}
+	ref, err := CreateTag(repo, h, "v0.0.1", "release one", id)
+	if err != nil {
+		t.Fatalf("CreateTag: %v", err)
+	}
+	if ref == nil {
+		t.Fatal("nil ref returned")
+	}
+
+	obj, err := repo.TagObject(ref.Hash())
+	if err != nil {
+		t.Fatalf("TagObject: %v", err)
+	}
+	if obj.Name != "v0.0.1" {
+		t.Errorf("name = %q, want v0.0.1", obj.Name)
+	}
+	if obj.Target != h {
+		t.Errorf("target = %s, want %s", obj.Target, h)
+	}
+	if obj.Message != "release one\n" {
+		t.Errorf("message = %q, want %q", obj.Message, "release one\n")
+	}
+	if obj.Tagger.Name != "Tagger" {
+		t.Errorf("tagger name = %q, want Tagger", obj.Tagger.Name)
+	}
+	if obj.PGPSignature != "" {
+		t.Errorf("unsigned tag has PGPSignature: %q", obj.PGPSignature)
+	}
+}
+
+func TestCreateTagDuplicateFails(t *testing.T) {
+	repo, wt, dir := initTestRepo(t)
+	commitFile(t, dir, "a.txt", "a")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := Commit(repo, wt, CommitMessage{Subject: "init"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{Name: "Tagger", Email: "tag@example.com"}
+	if _, err := CreateTag(repo, h, "v0.0.1", "first", id); err != nil {
+		t.Fatalf("CreateTag first: %v", err)
+	}
+	if _, err := CreateTag(repo, h, "v0.0.1", "second", id); err == nil {
+		t.Fatal("expected error for duplicate tag, got nil")
+	}
+}
+
+func TestSignedTagRoundTrip(t *testing.T) {
+	repo, wt, dir := initTestRepo(t)
+	commitFile(t, dir, "a.txt", "a")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := Commit(repo, wt, CommitMessage{Subject: "init"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, privEd, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPriv, err := ssh.NewSignerFromKey(privEd)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id := Identity{Name: "Tagger", Email: "tag@example.com"}
+	ref, err := SignedTag(repo, h, "v0.0.1", "signed release", id, func(payload []byte) ([]byte, error) {
+		sig, err := sshsig.Sign(strings.NewReader(string(payload)), sshPriv, sign.HashAlgorithm, sign.Namespace)
+		if err != nil {
+			return nil, err
+		}
+		return sshsig.Armor(sig), nil
+	})
+	if err != nil {
+		t.Fatalf("SignedTag: %v", err)
+	}
+
+	obj, err := repo.TagObject(ref.Hash())
+	if err != nil {
+		t.Fatalf("TagObject: %v", err)
+	}
+	if obj.PGPSignature == "" {
+		t.Fatal("expected PGPSignature set on signed tag")
+	}
+	if !strings.Contains(obj.PGPSignature, "BEGIN SSH SIGNATURE") {
+		t.Errorf("signature not armored: %q", obj.PGPSignature)
+	}
+
+	// Rebuild the signed payload and verify.
+	payload, err := tagPayload("v0.0.1", h, "signed release", id)
+	if err != nil {
+		t.Fatalf("tagPayload: %v", err)
+	}
+	sig, err := sshsig.Unarmor([]byte(obj.PGPSignature))
+	if err != nil {
+		t.Fatalf("Unarmor: %v", err)
+	}
+	if err := sshsig.Verify(
+		strings.NewReader(string(payload)), sig,
+		sshPriv.PublicKey(), sign.HashAlgorithm, sign.Namespace,
+	); err != nil {
+		t.Fatalf("verify tag signature: %v", err)
+	}
+}

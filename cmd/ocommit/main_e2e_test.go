@@ -60,12 +60,55 @@ func TestMainEndToEnd(t *testing.T) {
 	if !strings.Contains(string(out), "update") {
 		t.Errorf("output missing commit subject: %s", out)
 	}
+	// The auto-tag step must announce the semver tag.
+	if !strings.Contains(string(out), "tagged") {
+		t.Errorf("output missing tag notice: %s", out)
+	}
 
 	// Verify the repo actually has a commit.
 	show := exec.Command("git", "rev-parse", "HEAD")
 	show.Dir = repoDir
 	if out2, err := show.CombinedOutput(); err != nil || len(out2) == 0 {
 		t.Fatalf("no commit created: %v\n%s", err, out2)
+	}
+
+	// Verify the semver tag was created and points at HEAD.
+	tag := exec.Command("git", "tag", "-l", "v*")
+	tag.Dir = repoDir
+	tagOut, err := tag.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git tag -l failed: %v\n%s", err, tagOut)
+	}
+	tags := strings.Fields(strings.TrimSpace(string(tagOut)))
+	if len(tags) != 1 {
+		t.Fatalf("expected 1 semver tag, got %d: %v", len(tags), tags)
+	}
+	if tags[0] != "v0.0.1" {
+		t.Errorf("tag = %q, want v0.0.1", tags[0])
+	}
+	revTag := exec.Command("git", "rev-parse", tags[0])
+	revTag.Dir = repoDir
+	revOut, err := revTag.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git rev-parse %s failed: %v\n%s", tags[0], err, revOut)
+	}
+	// An annotated tag ref resolves to the tag object, which dereferences
+	// to the commit. Use^{commit} to get the commit hash.
+	deref := exec.Command("git", "rev-parse", tags[0]+"^{commit}")
+	deref.Dir = repoDir
+	derefOut, err := deref.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git rev-parse %s^{{commit}} failed: %v\n%s", tags[0], err, derefOut)
+	}
+	if strings.TrimSpace(string(derefOut)) != strings.TrimSpace(string(revOut)) {
+		// The tag may be annotated; verify it dereferences to HEAD.
+		headRev := exec.Command("git", "rev-parse", "HEAD")
+		headRev.Dir = repoDir
+		headOut, _ := headRev.CombinedOutput()
+		if strings.TrimSpace(string(derefOut)) != strings.TrimSpace(string(headOut)) {
+			t.Errorf("tag does not point at HEAD: tag=%s head=%s",
+				strings.TrimSpace(string(derefOut)), strings.TrimSpace(string(headOut)))
+		}
 	}
 }
 

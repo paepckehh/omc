@@ -349,6 +349,31 @@ func (u *UI) CommitResult(hash, logOut string) {
 	u.Println(block)
 }
 
+// TagResult renders the post-commit semver tag notice to stdout. signed
+// indicates whether the tag was SSH-signed. On a non-TTY it prints a plain
+// greppable line.
+func (u *UI) TagResult(name, shortHash string, signed bool) {
+	if !u.tty {
+		if signed {
+			fmt.Fprintf(u.Out, "%s: tagged %s %s (signed)\n", Brand, name, shortHash)
+			return
+		}
+		fmt.Fprintf(u.Out, "%s: tagged %s %s\n", Brand, name, shortHash)
+		return
+	}
+	var parts []string
+	parts = append(parts,
+		u.styles.brand.Render(Brand),
+		u.styles.ok.Render("✓"),
+		u.styles.muted.Render("tagged"),
+		u.styles.subject.Render(name),
+	)
+	if signed {
+		parts = append(parts, u.styles.signed.Render("(signed)"))
+	}
+	u.Println(lipgloss.JoinHorizontal(lipgloss.Left, parts...))
+}
+
 // CleanTree renders the "nothing to commit" notice to stderr.
 func (u *UI) CleanTree() {
 	if !u.tty {

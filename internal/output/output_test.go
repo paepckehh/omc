@@ -167,3 +167,25 @@ func TestIsTTYFalseForBuffer(t *testing.T) {
 		t.Error("IsTTY() = true for non-file writer, want false")
 	}
 }
+
+func TestTagResultNonTTY(t *testing.T) {
+	t.Run("unsigned", func(t *testing.T) {
+		ui, out, _ := newTestUI()
+		ui.TagResult("v0.0.1", "abc1234", false)
+		got := out.String()
+		if !strings.Contains(got, "ocommit: tagged v0.0.1 abc1234") {
+			t.Errorf("missing tag line, got: %q", got)
+		}
+		if strings.Contains(got, "signed") {
+			t.Errorf("unsigned tag output contains 'signed': %q", got)
+		}
+	})
+	t.Run("signed", func(t *testing.T) {
+		ui, out, _ := newTestUI()
+		ui.TagResult("v0.0.2", "def5678", true)
+		got := out.String()
+		if !strings.Contains(got, "ocommit: tagged v0.0.2 def5678 (signed)") {
+			t.Errorf("missing signed tag line, got: %q", got)
+		}
+	})
+}

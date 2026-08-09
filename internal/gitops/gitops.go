@@ -9,7 +9,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -484,4 +486,218 @@ func indexOrder(n *indexNode) string {
 		return n.name + "/"
 	}
 	return n.name
+}
+
+// --- Semver auto-tagging -----------------------------------------------------
+
+// semverRe matches tags of the form vMAJOR.MINOR.PATCH with an optional
+// leading "v", where each numeric component has no leading zeros (except a
+// lone 0). Pre-release suffixes (e.g. -rc.1) and build metadata (+build) are
+// ignored for patch bumping: the base version still determines the next tag.
+var semverRe = regexp.MustCompile(`^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)`)
+
+// LatestSemverTag scans all refs under refs/tags/ and returns the highest
+// semver tag name (including the leading "v"). When no semver tag exists it
+// returns "" and a nil error; the caller then bumps the zero version.
+func LatestSemverTag(repo *git.Repository) (string, error) {
+	iter, err := repo.Tags()
+	if err != nil {
+		return "", fmt.Errorf("list tags: %w", err)
+	}
+	defer iter.Close()
+
+	var best *semver
+	var bestRaw string
+	err = iter.ForEach(func(ref *plumbing.Reference) error {
+		name := strings.TrimPrefix(ref.Name().String(), "refs/tags/")
+		m := semverRe.FindStringSubmatch(name)
+		if m == nil {
+			return nil
+		}
+		v, err := parseSemver(m[1], m[2], m[3])
+		if err != nil {
+			return nil
+		}
+		if best == nil || semverLess(best, v) {
+			best = v
+			bestRaw = name
+		}
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("iterate tags: %w", err)
+	}
+	return bestRaw, nil
+}
+
+// NextSemverTag returns the next patch-bumped semver tag for the given latest
+// tag. An empty latest means no prior tag exists; the result is v0.0.1.
+func NextSemverTag(latest string) string {
+	m := semverRe.FindStringSubmatch(latest)
+	if m == nil {
+		return "v0.0.1"
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor, _ := strconv.Atoi(m[2])
+	patch, _ := strconv.Atoi(m[3])
+	return fmt.Sprintf("v%d.%d.%d", major, minor, patch+1)
+}
+
+// CreateTag creates an annotated tag pointing at hash, using message as the
+// tag message and id as the tagger identity. It returns the created reference.
+func CreateTag(repo *git.Repository, hash plumbing.Hash, name, message string, id Identity) (*plumbing.Reference, error) {
+	if err := ensureTagAbsent(repo, name); err != nil {
+		return nil, err
+	}
+	tagObj, err := buildTagObject(name, hash, message, id, "")
+	if err != nil {
+		return nil, err
+	}
+	tagHash, err := storeTagObject(repo, tagObj)
+	if err != nil {
+		return nil, err
+	}
+	ref := plumbing.NewHashReference(plumbing.NewTagReferenceName(name), tagHash)
+	if err := repo.Storer.SetReference(ref); err != nil {
+		return nil, fmt.Errorf("set tag ref %s: %w", name, err)
+	}
+	return ref, nil
+}
+
+// SignedTag creates an annotated tag like CreateTag but embeds an armored SSH
+// signature, mirroring "git tag -s" with the ssh format. The signature covers
+// the full tag object content (object/type/tag/tagger/message) exactly as git
+// signs it; the armored block is appended after the message, which is how git
+// stores signed tags.
+func SignedTag(repo *git.Repository, hash plumbing.Hash, name, message string, id Identity, armoredSign func([]byte) ([]byte, error)) (*plumbing.Reference, error) {
+	if err := ensureTagAbsent(repo, name); err != nil {
+		return nil, err
+	}
+	payload, err := tagPayload(name, hash, message, id)
+	if err != nil {
+		return nil, err
+	}
+	armored, err := armoredSign(payload)
+	if err != nil {
+		return nil, fmt.Errorf("sign tag payload: %w", err)
+	}
+	tagObj, err := buildTagObject(name, hash, message, id, string(armored))
+	if err != nil {
+		return nil, err
+	}
+	tagHash, err := storeTagObject(repo, tagObj)
+	if err != nil {
+		return nil, err
+	}
+	ref := plumbing.NewHashReference(plumbing.NewTagReferenceName(name), tagHash)
+	if err := repo.Storer.SetReference(ref); err != nil {
+		return nil, fmt.Errorf("set tag ref %s: %w", name, err)
+	}
+	return ref, nil
+}
+
+// ensureTagAbsent returns an error when the tag already exists.
+func ensureTagAbsent(repo *git.Repository, name string) error {
+	_, err := repo.Storer.Reference(plumbing.NewTagReferenceName(name))
+	switch err {
+	case nil:
+		return fmt.Errorf("tag %s already exists", name)
+	case plumbing.ErrReferenceNotFound:
+		return nil
+	default:
+		return fmt.Errorf("check tag %s: %w", name, err)
+	}
+}
+
+// tagPayload returns the canonical bytes a signed tag covers: everything in
+// the tag object before the signature block.
+func tagPayload(name string, target plumbing.Hash, message string, id Identity) ([]byte, error) {
+	sig := signatureFrom(id)
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "object %s\n", target)
+	fmt.Fprintf(&b, "type %s\n", plumbing.CommitObject.Bytes())
+	fmt.Fprintf(&b, "tag %s\n", name)
+	b.WriteString("tagger ")
+	if err := sig.Encode(&b); err != nil {
+		return nil, fmt.Errorf("encode tagger: %w", err)
+	}
+	b.WriteString("\n\n")
+	msg := strings.TrimSpace(message)
+	if msg == "" {
+		msg = "update"
+	}
+	b.WriteString(msg)
+	b.WriteString("\n")
+	return b.Bytes(), nil
+}
+
+// buildTagObject assembles the full tag object content, optionally with a
+// trailing armored signature block.
+func buildTagObject(name string, target plumbing.Hash, message string, id Identity, signature string) ([]byte, error) {
+	payload, err := tagPayload(name, target, message, id)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(signature) == "" {
+		return payload, nil
+	}
+	sig := strings.TrimSuffix(signature, "\n")
+	return append(payload, []byte(sig+"\n")...), nil
+}
+
+// storeTagObject writes raw tag object bytes into the object database and
+// returns the new object's hash.
+func storeTagObject(repo *git.Repository, content []byte) (plumbing.Hash, error) {
+	obj := repo.Storer.NewEncodedObject()
+	obj.SetType(plumbing.TagObject)
+	obj.SetSize(int64(len(content)))
+	w, err := obj.Writer()
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("open tag writer: %w", err)
+	}
+	if _, err := w.Write(content); err != nil {
+		w.Close()
+		return plumbing.ZeroHash, fmt.Errorf("write tag object: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("close tag writer: %w", err)
+	}
+	hash, err := repo.Storer.SetEncodedObject(obj)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("store tag object: %w", err)
+	}
+	return hash, nil
+}
+
+// --- semver helpers ----------------------------------------------------------
+
+type semver struct {
+	major, minor, patch int
+}
+
+func parseSemver(major, minor, patch string) (*semver, error) {
+	maj, err := strconv.Atoi(major)
+	if err != nil {
+		return nil, err
+	}
+	min, err := strconv.Atoi(minor)
+	if err != nil {
+		return nil, err
+	}
+	p, err := strconv.Atoi(patch)
+	if err != nil {
+		return nil, err
+	}
+	return &semver{major: maj, minor: min, patch: p}, nil
+}
+
+// semverLess reports whether a is strictly older than b.
+func semverLess(a, b *semver) bool {
+	if a.major != b.major {
+		return a.major < b.major
+	}
+	if a.minor != b.minor {
+		return a.minor < b.minor
+	}
+	return a.patch < b.patch
 }

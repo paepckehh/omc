@@ -37,7 +37,7 @@ Every option is an environment variable, so it composes in scripts, aliases, pre
 <td width="50%" valign="top">
 
 ### 🟢 Native git in Go
-Repository discovery, `git add -A`, unified diffs, commit creation, and `git log` all run through [go-git]. No external `git` process at runtime — only one static binary.
+Repository discovery, `git add -A`, unified diffs, commit creation, annotated tags, and `git log` all run through [go-git]. No external `git` process at runtime — only one static binary.
 
 </td>
 </tr>
@@ -66,6 +66,20 @@ With `OLLAMA_DESC_URL` set, the staged diff is sent to your **local** model twic
 
 ### 🛡️ Always does the right, minimal thing
 No repo → clear error. No Ollama → `update`. No key → unsigned. It never leaves a task half-done over infrastructure.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 🏷️ Auto semver tagging
+Every successful commit is immediately tagged with the next patch version (`vX.Y.N+1`). The latest `v*.*.*` tag is discovered, the patch is bumped, and an annotated tag is created on the new commit — SSH-signed when a key is configured, just like the commit itself.
+
+</td>
+<td width="50%" valign="top">
+
+### 🔁 Idempotent & predictable
+No flags to remember, no prompts to answer. Run it twice, get two commits and two bumped tags (`v0.0.1`, then `v0.0.2`). Tags never collide; the patch always advances.
 
 </td>
 </tr>
@@ -140,6 +154,8 @@ $ ocommit
  ocommit  ✓ commit  committing as Ada Lovelace <ada@example.com> (signed)
  ocommit  ✓ log
  ocommit  ✓ committed 9d3f2ab
+ ocommit  ✓ tag  bumping semver patch
+ ocommit  ✓ tagged v0.3.8 9d3f2ab (signed)
 9d3f2ab  Ada Lovelace <ada@example.com>  2026-08-08
     sign commit payloads with git's SSH signature format
     signed: yes
@@ -159,6 +175,7 @@ ocommit: ollama condensing to TL;DR 50%
 ocommit: ollama commit message ready 100%
 ocommit: signing commit with ssh key /home/me/.ssh/agent
 ocommit: committed 9d3f2ab
+ocommit: tagged v0.3.8 9d3f2ab (signed)
 9d3f2ab  Ada Lovelace <ada@example.com>  2026-08-08
     sign commit payloads with git's SSH signature format
     signed: yes
@@ -329,6 +346,42 @@ network.
 </details>
 
 <details>
+<summary><b>🏷️ Auto semver tagging — how the tag is created</b></summary>
+
+Immediately after a successful commit, `ocommit` tags that commit with the next
+patch-level semver tag:
+
+1. All existing `refs/tags/v*.*.*` refs are scanned; the highest semver version
+   is selected (pre-release suffixes like `-rc.1` are ignored for comparison).
+2. The patch segment is bumped by one (`v1.2.3` → `v1.2.4`). When no semver
+   tag exists yet, the first tag is `v0.0.1`.
+3. An **annotated** tag object is created on the new commit. The tag message is
+   the commit's subject line.
+4. When `OCOMMIT_KEY_PATH` is set and the key is valid, the tag is **SSH-signed**
+   with the same key used for the commit — the armored `BEGIN SSH SIGNATURE`
+   block is embedded in the tag object, byte-compatible with `git tag -s`.
+   When no key is configured, an unsigned annotated tag is created instead.
+
+The tag step always runs after a commit. If the tag step fails (e.g. a tag of
+that name already exists), `ocommit` logs a warning and exits 0 — the commit
+itself is not affected.
+
+```console
+$ git tag -l 'v*'
+v0.0.1
+$ git tag -v v0.0.1    # verify the SSH signature
+object 9d3f2ab...
+type commit
+tag v0.0.1
+tagger Ada Lovelace <ada@example.com>
+
+sign commit payloads with git's SSH signature format
+tagger signature verified:
+```
+
+</details>
+
+<details>
 <summary><b>👤 Git identity resolution order</b></summary>
 
 `internal/gitops.ResolveIdentity()` resolves the commit identity in this order:
@@ -360,6 +413,7 @@ the identity fallback; nothing else depends on them.
 │  5. optional: SSH sign   (hiddeco/sshsig, "git" ns, sha512)  │
 │  6. create commit        (object.Commit, advance HEAD)        │
 │  7. print git log                                            │
+│  8. auto-tag             (latest v*.*.* → patch+1, signed)   │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -377,7 +431,8 @@ verification never hiccups.
 cmd/ocommit/            entry point (env → pipeline → output)
 internal/config/        config.FromEnv() reads the five env vars
 internal/gitops/        PlainOpen detection, StageAll, StagedDiff, Commit,
-                        SignedCommit, Log, ResolveIdentity, index→tree writer
+                        SignedCommit, Log, ResolveIdentity, index→tree writer,
+                        semver tag discovery, CreateTag, SignedTag
 internal/sign/          sign.Load(keyPath), signer.Sign(payload) → armored SSH sig
 internal/ollama/        Client.Available(), DescribeDetail(), SummarizeTLDR()
 internal/output/        UI: stdout = results, stderr = diagnostics

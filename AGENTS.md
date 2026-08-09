@@ -31,14 +31,32 @@ instance.
 ## Where things live
 
 ```
-cmd/ocommit/main.go   pipeline: repo → stage → diff → (ollama) → (sign) → commit → log
+cmd/ocommit/main.go   pipeline: repo → stage → diff → (ollama) → (sign) → commit → log → tag
 internal/config/      config.FromEnv() reads the five env vars
 internal/gitops/      PlainOpen detection, StageAll, StagedDiff, Commit,
-                      SignedCommit, Log, ResolveIdentity, index→tree writer
+                      SignedCommit, Log, ResolveIdentity, index→tree writer,
+                      LatestSemverTag, NextSemverTag, CreateTag, SignedTag
 internal/sign/        sign.Load(keyPath), signer.Sign(payload) → armored SSH sig
 internal/ollama/      Client.Available(), DescribeDetail(), SummarizeTLDR()
 internal/output/      UI: stdout = results, stderr = diagnostics
 ```
+
+## Auto semver tagging
+
+After every successful commit, `ocommit` tags that commit with the next
+patch-bumped semver tag (`vX.Y.N+1`):
+
+1. `gitops.LatestSemverTag(repo)` scans all `refs/tags/v*.*.*` refs and
+   returns the highest semver version (pre-release suffixes ignored).
+2. `gitops.NextSemverTag(latest)` bumps the patch segment. An empty latest
+   (no prior tag) yields `v0.0.1`.
+3. `gitops.CreateTag` / `gitops.SignedTag` creates an **annotated** tag object
+   on the new commit. The tag message is the commit's subject line. When a
+   signer is available the tag is SSH-signed with the same key used for the
+   commit — the armored `BEGIN SSH SIGNATURE` block is appended to the tag
+   object content, byte-compatible with `git tag -s`.
+4. If the tag step fails (e.g. name collision), `ocommit` logs a warning and
+   exits 0. The commit is never rolled back over a tag failure.
 
 ## Commit message format
 
@@ -91,6 +109,10 @@ for the identity fallback; nothing else depends on them.
 - `writeIndexTree` builds tree objects from the index; it must produce trees
   byte-identical to git so that `git log --show-signature` and `git
   verify-commit` accept signed commits.
+- `SignedTag` builds tag objects with an appended SSH signature block; the
+  signed payload is the full tag object content (object/type/tag/tagger/message)
+  before the signature, matching what `git tag -s` signs. `git verify-tag`
+  accepts the result.
 
 ## Testing
 
@@ -106,4 +128,5 @@ for the identity fallback; nothing else depends on them.
 3. `go test ./...` passes
 4. `go vet ./...` passes
 5. Behavior honored: repo detection, stage-all, optional signing, optional
-   Ollama message generation, git log output.
+   Ollama message generation, git log output, and auto semver tagging of the
+   new commit (signed when a key is configured).

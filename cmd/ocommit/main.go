@@ -174,6 +174,41 @@ func run() int {
 	}
 
 	ui.CommitResult(hash.String()[:7], logOut)
+
+	// 8. Tag the new commit with the next semver patch (vX.Y.N+1). The tag
+	// message is the commit subject; the tag is SSH-signed when a signer is
+	// available, otherwise unsigned.
+	tagCommit, err := repo.CommitObject(hash)
+	if err != nil {
+		ui.Warn("tag: read commit for subject: %v", err)
+		return 0
+	}
+	tagSubject, _, _ := strings.Cut(tagCommit.Message, "\n")
+	if tagSubject == "" {
+		tagSubject = "update"
+	}
+
+	var tagName string
+	if err := ui.Step("tag", "bumping semver patch", func() error {
+		latest, lerr := gitops.LatestSemverTag(repo)
+		if lerr != nil {
+			return lerr
+		}
+		tagName = gitops.NextSemverTag(latest)
+		if signer != nil {
+			_, terr := gitops.SignedTag(repo, hash, tagName, tagSubject, id, func(payload []byte) ([]byte, error) {
+				return signer.Sign(payload)
+			})
+			return terr
+		}
+		_, terr := gitops.CreateTag(repo, hash, tagName, tagSubject, id)
+		return terr
+	}); err != nil {
+		ui.Warn("tag: failed to tag %s: %v", tagName, err)
+		return 0
+	}
+
+	ui.TagResult(tagName, hash.String()[:7], signer != nil)
 	return 0
 }
 
