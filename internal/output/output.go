@@ -502,6 +502,15 @@ func (u *UI) Summary(subject, body string) {
 	u.Println(lipgloss.JoinVertical(lipgloss.Left, block...))
 }
 
+// Startup prints the version banner shown at program start. It goes to
+// stderr (it is a diagnostic, not program output) as a structured INFO
+// record so it remains greppable in plain mode and styled on a TTY. The
+// version string is the hardwired/linker-stamped value from
+// internal/version (see AGENTS.md "Release / version stamping").
+func (u *UI) Startup(version string) {
+	u.emit(u.Err, "INFO", "", Brand+" "+version)
+}
+
 // SigningNotice renders the signing-on / signing-off notice line.
 func (u *UI) SigningNotice(keyPath string, enabled bool) {
 	if enabled {

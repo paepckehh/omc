@@ -40,6 +40,7 @@ import (
 	"paepcke.de/ocommit/internal/ollama"
 	"paepcke.de/ocommit/internal/output"
 	"paepcke.de/ocommit/internal/sign"
+	"paepcke.de/ocommit/internal/version"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -49,6 +50,7 @@ func main() { os.Exit(run()) }
 
 func run() int {
 	ui := output.New(os.Stdout, os.Stderr)
+	ui.Startup(version.Version)
 	cfg := config.FromEnv()
 
 	// 1. Find the repository we are inside of.

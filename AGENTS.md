@@ -41,7 +41,30 @@ internal/gitops/      PlainOpen detection, StageAll, StagedDiff, Commit,
 internal/sign/        sign.Load(keyPath), signer.Sign(payload) → armored SSH sig
 internal/ollama/      Client.Available(), DescribeDetail(), SummarizeTLDR()
 internal/output/      UI: stdout = structured results, stderr = structured diagnostics
+internal/version/     Version string: hardwired semver, overridable via linker -X
 ```
+
+## Release / version stamping
+
+The program version lives in `internal/version/version.go` as a single
+package-level `var Version = "vX.Y.Z"` and is printed as a structured
+INFO record at startup (see `output.UI.Startup`).
+
+**When tagging a release, the version in code MUST be bumped to match the
+new git tag** before committing and tagging. The two must always agree:
+
+1. Edit `internal/version/version.go` and set `Version` to the new tag
+   (e.g. `v0.1.12`).
+2. Commit that change.
+3. `git tag` the commit with the same semver value.
+
+The hardwired constant is the fallback. The Makefile overrides it at link
+time with the git tag via `-ldflags "-X
+paepcke.de/ocommit/internal/version.Version=$(VERSION)"`, where `VERSION ?=
+$(shell git describe --tags --abbrev=0 ...)`. So a `make build` always
+stamps the binary with the exact tag it was built from; a plain `go
+build` uses the hardwired constant. Either way the version printed at
+startup is correct as long as the constant and the latest tag agree.
 
 ## Auto semver tagging
 
@@ -173,6 +196,9 @@ for the identity fallback; nothing else depends on them.
 2. `go build ./...` passes
 3. `go test ./...` passes
 4. `go vet ./...` passes
-5. Behavior honored: repo detection, stage-all, optional signing, optional
-   Ollama message generation, structured timestamped log output, and auto
-   semver tagging of the new commit (signed when a key is configured).
+5. `internal/version/version.go` `Version` matches the latest git tag
+   (see "Release / version stamping").
+6. Behavior honored: repo detection, stage-all, optional signing, optional
+   Ollama message generation, structured timestamped log output (starting
+   with the version banner), and auto semver tagging of the new commit
+   (signed when a key is configured).
