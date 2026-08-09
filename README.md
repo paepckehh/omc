@@ -9,7 +9,7 @@ It takes **zero command line arguments** — every behavior is an environment
 variable — and inside any git working tree it does the equivalent of:
 
 ```console
-git add -A && git commit -asm <detailed llm generated commit message content> && git log
+git add -A && git commit -asm <detailed llm generated commit message content>
 ```
 
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev)
@@ -37,7 +37,7 @@ Every option is an environment variable, so it composes in scripts, aliases, pre
 <td width="50%" valign="top">
 
 ### 🟢 Native git in Go
-Repository discovery, `git add -A`, unified diffs, commit creation, annotated tags, and `git log` all run through [go-git]. No external `git` process at runtime — only one static binary.
+Repository discovery, `git add -A`, unified diffs, commit creation, and annotated tags all run through [go-git]. No external `git` process at runtime — only one static binary. History output is left to your own `git log` invocation.
 
 </td>
 </tr>
@@ -139,58 +139,81 @@ ocommit
 
 ## 🎬 Demo
 
-When stderr is a terminal, `ocommit` renders a small, modern TUI built on
-[charmbracelet/bubbles] + [lipgloss]: animated spinners per pipeline step,
-a gradient progress bar for the two-stage LLM generation, and a styled
-commit-result block with the recent git log.
+When stderr is a terminal, `ocommit` renders a structured, timestamped TUI
+built on [charmbracelet/bubbles] + [lipgloss]: every line is a structured log
+record of the form `<HH:MM:SS> <LEVEL> ocommit [<step>] <message> [key=value ...]`,
+with animated spinners per pipeline step, a gradient progress bar for the
+two-stage LLM generation, and color-coded levels (OK / INFO / WARN / FAIL).
 
 ```console
 $ export OLLAMA_DESC_URL=http://127.0.0.1:11434
 $ export OCOMMIT_KEY_PATH=~/.ssh/agent
 $ ocommit
- ocommit  ✓ open
- ocommit  ✓ stage
- ocommit  ✓ diff
- ocommit  › internal/ollama/ollama.go
-         › cmd/ocommit/main.go
- ocommit  ✓ ollama probing local ollama at http://127.0.0.1:11434
- ocommit  generating commit message ████████████████████████████
- ocommit  condensing to TL;DR        ████████████
- ocommit  commit message ready       ████████████████████████████
- ocommit  commit message:
- sign commit payloads with git's SSH signature format
+12:04:07 INFO  ocommit open   detecting repository
+12:04:07 OK    ocommit open   done
+12:04:07 INFO  ocommit stage  staging all changes
+12:04:07 OK    ocommit stage  done
+12:04:07 INFO  ocommit diff   reading staged diff
+12:04:07 OK    ocommit diff   done
+12:04:07 INFO  ocommit diff   changed files  count=2
+  › internal/ollama/ollama.go
+  › cmd/ocommit/main.go
+12:04:07 INFO  ocommit ollama probing local ollama at http://127.0.0.1:11434
+12:04:07 OK    ocommit ollama done
+12:04:07 INFO  ocommit ollama generating commit message  progress=  0%
+12:04:08 INFO  ocommit ollama condensing to TL;DR         progress= 50%
+12:04:08 INFO  ocommit ollama commit message ready        progress=100%
+12:04:08 INFO  ocommit msg    commit message:
+sign commit payloads with git's SSH signature format
  - Adds an armored BEGIN SSH SIGNATURE header to the commit object...
- ocommit  ✓ load key
- ocommit  🔑 signing with /home/me/.ssh/agent
- ocommit  ✓ commit  committing as Ada Lovelace <ada@example.com> (signed)
- ocommit  ✓ log
- ocommit  ✓ committed 9d3f2ab
- ocommit  ✓ tag  bumping semver patch
- ocommit  ✓ tagged v0.3.8 9d3f2ab (signed)
-9d3f2ab  Ada Lovelace <ada@example.com>  2026-08-08
-    sign commit payloads with git's SSH signature format
-    signed: yes
+12:04:08 INFO  ocommit load   loading ssh signing key
+12:04:08 OK    ocommit load   done
+12:04:08 INFO  ocommit sign   signing commit with ssh key  key=/home/me/.ssh/agent
+12:04:08 INFO  ocommit commit committing as Ada Lovelace <ada@example.com> (signed)
+12:04:09 OK    ocommit commit done
+12:04:09 OK    ocommit commit committed  hash=9d3f2ab signed=true
+12:04:09 INFO  ocommit tag    bumping semver patch
+12:04:09 OK    ocommit tag    done
+12:04:09 OK    ocommit tag    tagged  tag=v0.3.9 hash=9d3f2ab signed=true
 ```
 
 Piped or non-interactive output (CI logs, captured tests) automatically falls
-back to the original greppable line format:
+back to the same structured, greppable line format without color codes:
 
 ```console
 $ ocommit
-ocommit: open detecting repository
-ocommit: stage staging all changes
-ocommit: diff reading staged diff
-ocommit: ollama probing local ollama at http://127.0.0.1:11434
-ocommit: ollama generating commit message 0%
-ocommit: ollama condensing to TL;DR 50%
-ocommit: ollama commit message ready 100%
-ocommit: signing commit with ssh key /home/me/.ssh/agent
-ocommit: committed 9d3f2ab
-ocommit: tagged v0.3.8 9d3f2ab (signed)
-9d3f2ab  Ada Lovelace <ada@example.com>  2026-08-08
-    sign commit payloads with git's SSH signature format
-    signed: yes
+12:04:07 INFO ocommit open detecting repository
+12:04:07 OK ocommit open done
+12:04:07 INFO ocommit stage staging all changes
+12:04:07 OK ocommit stage done
+12:04:07 INFO ocommit diff reading staged diff
+12:04:07 OK ocommit diff done
+12:04:07 INFO ocommit diff changed files count=2
+  - internal/ollama/ollama.go
+  - cmd/ocommit/main.go
+12:04:07 INFO ocommit ollama probing local ollama at http://127.0.0.1:11434
+12:04:07 OK ocommit ollama done
+12:04:07 INFO ocommit ollama generating commit message progress=  0%
+12:04:08 INFO ocommit ollama condensing to TL;DR progress= 50%
+12:04:08 INFO ocommit ollama commit message ready progress=100%
+12:04:08 INFO ocommit msg subject: sign commit payloads with git's SSH signature format
+12:04:08 INFO ocommit msg body:
+ - Adds an armored BEGIN SSH SIGNATURE header to the commit object...
+12:04:08 INFO ocommit load loading ssh signing key
+12:04:08 OK ocommit load done
+12:04:08 INFO ocommit sign signing commit with ssh key key=/home/me/.ssh/agent
+12:04:08 INFO ocommit commit committing as Ada Lovelace <ada@example.com> (signed)
+12:04:09 OK ocommit commit done
+12:04:09 OK ocommit commit committed hash=9d3f2ab signed=true
+12:04:09 INFO ocommit tag bumping semver patch
+12:04:09 OK ocommit tag done
+12:04:09 OK ocommit tag tagged tag=v0.3.9 hash=9d3f2ab signed=true
 ```
+
+Every field is a separate, greppable token — `tag=v0.3.9`, `hash=9d3f2ab`,
+`signed=true` — so downstream pipelines and log aggregators can parse them
+without ambiguous whitespace. The commit and tag results go to stdout; all
+diagnostics and progress go to stderr.
 
 No arguments were typed. No `git` binary was spawned. No prompts were answered.
 Everything that matters came from the environment.
@@ -471,7 +494,7 @@ the identity fallback; nothing else depends on them.
 │  4. optional: Ollama two-pass message generation             │
 │  5. optional: SSH sign   (hiddeco/sshsig, "git" ns, sha512)  │
 │  6. create commit        (object.Commit, advance HEAD)        │
-│  7. print git log                                            │
+│  7. print result         (structured, timestamped log line)  │
 │  8. auto-tag             (latest v*.*.* → patch+1, signed)   │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -481,20 +504,22 @@ author/committer, message, and — when signing — a `gpgsig`-style SSH signatu
 header covering the header-less payload. The result is a first-class signed
 commit that `git log --show-signature` and `git verify-commit` accept. `ocommit`
 builds its own trees from the index, byte-identical to what git would write, so
-verification never hiccups.
+verification never hiccups. The tool itself no longer prints a `git log`-style
+history block; it emits a single structured `committed` record and leaves
+history inspection to the user.
 
 <details>
 <summary><b>🏗️ Where things live (project layout)</b></summary>
 
 ```
 cmd/ocommit/            entry point (env → pipeline → output)
-internal/config/        config.FromEnv() reads the five env vars
+internal/config/        config.FromEnv() reads the env vars
 internal/gitops/        PlainOpen detection, StageAll, StagedDiff, Commit,
-                        SignedCommit, Log, ResolveIdentity, index→tree writer,
+                        SignedCommit, ResolveIdentity, index→tree writer,
                         semver tag discovery, CreateTag, SignedTag
 internal/sign/          sign.Load(keyPath), signer.Sign(payload) → armored SSH sig
 internal/ollama/        Client.Available(), DescribeDetail(), SummarizeTLDR()
-internal/output/        UI: stdout = results, stderr = diagnostics
+internal/output/        UI: stdout = structured results, stderr = structured diagnostics
 ```
 
 </details>

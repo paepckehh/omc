@@ -19,7 +19,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/storer"
 )
 
 // ErrNotARepository is returned when the current directory is not inside a
@@ -335,41 +334,6 @@ func SignedCommit(repo *git.Repository, wt *git.Worktree, msg CommitMessage, arm
 		return plumbing.ZeroHash, err
 	}
 	return hash, nil
-}
-
-func Log(repo *git.Repository, limit int) (string, error) {
-	if limit <= 0 {
-		limit = 5
-	}
-	cIter, err := repo.Log(&git.LogOptions{Order: git.LogOrderCommitterTime})
-	if err != nil {
-		return "", fmt.Errorf("open log: %w", err)
-	}
-
-	var out bytes.Buffer
-	seen := 0
-	err = cIter.ForEach(func(c *object.Commit) error {
-		if seen >= limit {
-			return storer.ErrStop
-		}
-		seen++
-		short := c.Hash.String()
-		if len(short) > 7 {
-			short = short[:7]
-		}
-		first, _, _ := strings.Cut(c.Message, "\n")
-		fmt.Fprintf(&out, "%s  %s <%s>  %s\n",
-			short, c.Author.Name, c.Author.Email, c.Author.When.Format("2006-01-02"))
-		fmt.Fprintf(&out, "    %s\n", first)
-		if c.PGPSignature != "" {
-			out.WriteString("    signed: yes\n")
-		}
-		return nil
-	})
-	if err != nil {
-		return "", fmt.Errorf("iterate log: %w", err)
-	}
-	return out.String(), nil
 }
 
 // advanceBranch moves the current branch (or detached HEAD) to the new

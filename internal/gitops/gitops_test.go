@@ -167,25 +167,6 @@ func TestStagedDiff(t *testing.T) {
 	}
 }
 
-func TestLogFormat(t *testing.T) {
-	repo, wt, dir := initTestRepo(t)
-	commitFile(t, dir, "a.txt", "a")
-	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Commit(repo, wt, CommitMessage{Subject: "First commit"}); err != nil {
-		t.Fatal(err)
-	}
-
-	out, err := Log(repo, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out, "First commit") {
-		t.Errorf("log missing subject: %q", out)
-	}
-}
-
 func TestResolveIdentityPriority(t *testing.T) {
 	dir := t.TempDir()
 	repo, err := git.PlainInit(dir, false)

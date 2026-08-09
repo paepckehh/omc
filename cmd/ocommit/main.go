@@ -172,21 +172,9 @@ func run() int {
 		return 1
 	}
 
-	// 7. Show what was committed.
-	var logOut string
-	if err := ui.Step("log", "reading recent history", func() error {
-		out, err := gitops.Log(repo, 5)
-		if err != nil {
-			return err
-		}
-		logOut = out
-		return nil
-	}); err != nil {
-		ui.Error(err)
-		return 1
-	}
-
-	ui.CommitResult(hash.String()[:7], logOut)
+	// 7. Show what was committed (structured record; the git log is left to
+	// the user's own `git log` invocation).
+	ui.CommitResult(hash.String()[:7], signer != nil)
 
 	// 8. Tag the new commit with the next semver patch (vX.Y.N+1). The tag
 	// message is the commit subject; the tag is SSH-signed when a signer is

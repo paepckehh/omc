@@ -9,9 +9,9 @@ It takes **no command line arguments**: every behavior is controlled by
 environment variables.
 
 Core promise: inside a git working tree it performs the equivalent of
-`git add -A && git commit -asm update && git log` — with optional SSH commit
+`git add -A && git commit -asm update` — with optional SSH commit
 signing and optional LLM-generated commit messages via a local Ollama
-instance.
+instance. Every line of output is a structured, timestamped log record.
 
 ## Hard constraints
 
@@ -32,15 +32,15 @@ instance.
 ## Where things live
 
 ```
-cmd/ocommit/main.go   pipeline: repo → stage → diff → (overrides|ollama) → (sign) → commit → log → tag
+cmd/ocommit/main.go   pipeline: repo → stage → diff → (overrides|ollama) → (sign) → commit → tag
 internal/config/      config.FromEnv() reads the eight env vars
 internal/gitops/      PlainOpen detection, StageAll, StagedDiff, Commit,
-                      SignedCommit, Log, ResolveIdentity, index→tree writer,
+                      SignedCommit, ResolveIdentity, index→tree writer,
                       LatestSemverTag, NextSemverTag, CreateTag, SignedTag,
                       ValidSemverTag, NormalizeTag
 internal/sign/        sign.Load(keyPath), signer.Sign(payload) → armored SSH sig
 internal/ollama/      Client.Available(), DescribeDetail(), SummarizeTLDR()
-internal/output/      UI: stdout = results, stderr = diagnostics
+internal/output/      UI: stdout = structured results, stderr = structured diagnostics
 ```
 
 ## Auto semver tagging
@@ -174,5 +174,5 @@ for the identity fallback; nothing else depends on them.
 3. `go test ./...` passes
 4. `go vet ./...` passes
 5. Behavior honored: repo detection, stage-all, optional signing, optional
-   Ollama message generation, git log output, and auto semver tagging of the
-   new commit (signed when a key is configured).
+   Ollama message generation, structured timestamped log output, and auto
+   semver tagging of the new commit (signed when a key is configured).
