@@ -60,7 +60,6 @@ Everything that matters came from the environment.
 ## Requirements
 
 - Go 1.26+ to build (the binary itself is a single static executable).
-- A git repository — discovered by walking up parent directories, exactly like git.
 - **Optional**: a running [Ollama] server for AI-generated commit messages.
 - **Optional**: an SSH private key to sign commits.
 
