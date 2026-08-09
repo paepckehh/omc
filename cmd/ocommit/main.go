@@ -179,22 +179,17 @@ func run() int {
 	// 8. Tag the new commit with the next semver patch (vX.Y.N+1). The tag
 	// message is the commit subject; the tag is SSH-signed when a signer is
 	// available, otherwise unsigned.
-	tagCommit, err := repo.CommitObject(hash)
-	if err != nil {
-		ui.Warn("tag: read commit for subject: %v", err)
-		return 0
-	}
-	tagSubject, _, _ := strings.Cut(tagCommit.Message, "\n")
+	tagSubject := msg.Subject
 	if tagSubject == "" {
 		tagSubject = "update"
 	}
 
 	var tagName string
 	if err := ui.Step("tag", tagStepLabel(cfg), func() error {
-		if cfg.Tag != "" && !gitops.ValidSemverTag(cfg.Tag) {
+		name, skipped, terr := resolveTagName(repo, cfg)
+		if skipped {
 			ui.Warn("OCOMMIT_TAG %q is not strict semver (vMAJOR.MINOR.PATCH); falling back to auto-bump", cfg.Tag)
 		}
-		name, terr := resolveTagName(repo, cfg)
 		if terr != nil {
 			return terr
 		}
@@ -221,19 +216,23 @@ func run() int {
 // for bare "0.1.2") and used verbatim; otherwise the normal patch-bump path
 // runs. An invalid override is logged as a warning so the user knows the
 // override was ignored rather than silently dropped.
-func resolveTagName(repo *git.Repository, cfg config.Config) (string, error) {
+// resolveTagName decides the tag name for the new commit. When OCOMMIT_TAG
+// is set and parses as strict semver it is normalized (a leading "v" is added
+// for bare "0.1.2") and used verbatim; otherwise the normal patch-bump path
+// runs. The returned overrideSkipped flag is true when OCOMMIT_TAG was set
+// but rejected, so the caller can warn once without re-checking validity.
+func resolveTagName(repo *git.Repository, cfg config.Config) (name string, overrideSkipped bool, err error) {
 	if cfg.Tag != "" {
 		if gitops.ValidSemverTag(cfg.Tag) {
-			return gitops.NormalizeTag(cfg.Tag), nil
+			return gitops.NormalizeTag(cfg.Tag), false, nil
 		}
-		// Fall through to the auto-bump path; the warning is surfaced by
-		// the caller via the returned tag name mismatch, so just proceed.
+		overrideSkipped = true
 	}
 	latest, err := gitops.LatestSemverTag(repo)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	return gitops.NextSemverTag(latest), nil
+	return gitops.NextSemverTag(latest), overrideSkipped, nil
 }
 
 // tagStepLabel renders the label for the tag step based on the override.

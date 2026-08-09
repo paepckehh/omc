@@ -97,7 +97,7 @@ func repeatChar(b byte, n int) string {
 
 func TestResolveTagNameOverrideValid(t *testing.T) {
 	cfg := config.Config{Tag: "v5.4.3"}
-	got, err := resolveTagName(nil, cfg)
+	got, _, err := resolveTagName(nil, cfg)
 	if err != nil {
 		t.Fatalf("resolveTagName: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestResolveTagNameOverrideValid(t *testing.T) {
 
 func TestResolveTagNameOverrideBareGetsVPrefix(t *testing.T) {
 	cfg := config.Config{Tag: "5.4.3"}
-	got, err := resolveTagName(nil, cfg)
+	got, _, err := resolveTagName(nil, cfg)
 	if err != nil {
 		t.Fatalf("resolveTagName: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestResolveTagNameOverrideBareGetsVPrefix(t *testing.T) {
 
 func TestResolveTagNameOverrideLargeSegments(t *testing.T) {
 	cfg := config.Config{Tag: "v9999.888.7777"}
-	got, err := resolveTagName(nil, cfg)
+	got, _, err := resolveTagName(nil, cfg)
 	if err != nil {
 		t.Fatalf("resolveTagName: %v", err)
 	}

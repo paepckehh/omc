@@ -132,13 +132,10 @@ type Identity struct {
 // ResolveIdentity returns the commit identity: OCOMMIT_NAME/OCOMMIT_EMAIL
 // first, then the standard GIT_AUTHOR_*/GIT_COMMITTER_* variables, then the
 // repository's git config, and finally the built-in defaults.
+// ResolveIdentity returns the commit identity: OCOMMIT_NAME/OCOMMIT_EMAIL
+// first, then the standard GIT_AUTHOR_*/GIT_COMMITTER_* variables, then the
+// repository's git config, and finally the built-in defaults.
 func ResolveIdentity(repo *git.Repository) Identity {
-	return identity(repo)
-}
-
-// identity reads the identity from the environment and, failing that, from
-// the repository's git config, and finally falls back to fixed defaults.
-func identity(repo *git.Repository) Identity {
 	sig := Identity{Name: DefaultName, Email: DefaultEmail}
 	nameEnv := envOr("OCOMMIT_NAME", "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME")
 	emailEnv := envOr("OCOMMIT_EMAIL", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL")
@@ -148,8 +145,6 @@ func identity(repo *git.Repository) Identity {
 	if emailEnv != "" {
 		sig.Email = emailEnv
 	}
-	// Fall back to the repo's git config only when no environment variable
-	// configured the identity; env always wins.
 	if repo != nil && (nameEnv == "" || emailEnv == "") {
 		if cfg, err := repo.Config(); err == nil {
 			if nameEnv == "" && cfg.User.Name != "" {
@@ -162,6 +157,9 @@ func identity(repo *git.Repository) Identity {
 	}
 	return sig
 }
+
+// identity reads the identity from the environment and, failing that, from
+// the repository's git config, and finally falls back to fixed defaults.
 
 // envOr returns the first non-empty environment variable among keys.
 func envOr(keys ...string) string {
@@ -232,7 +230,7 @@ func Commit(repo *git.Repository, wt *git.Worktree, msg CommitMessage) (plumbing
 		return plumbing.ZeroHash, err
 	}
 
-	sig := signatureFrom(identity(repo))
+	sig := signatureFrom(ResolveIdentity(repo))
 	commit := &object.Commit{
 		Author:       sig,
 		Committer:    sig,
@@ -271,7 +269,7 @@ func SignedCommit(repo *git.Repository, wt *git.Worktree, msg CommitMessage, arm
 		return plumbing.ZeroHash, err
 	}
 
-	sig := signatureFrom(identity(repo))
+	sig := signatureFrom(ResolveIdentity(repo))
 
 	// Header block: identical to what git signs for a signed commit.
 	var headers bytes.Buffer
@@ -359,6 +357,8 @@ func writeIndexTree(repo *git.Repository) (plumbing.Hash, error) {
 	}
 
 	nodes := map[string]*indexNode{}
+	var kids []*indexNode
+	seen := map[string]bool{}
 	for _, e := range idx.Entries {
 		parts := strings.Split(e.Name, "/")
 		path := ""
@@ -375,22 +375,15 @@ func writeIndexTree(repo *git.Repository) (plumbing.Hash, error) {
 				nodes[path] = node
 				if prev != "" {
 					nodes[prev].children[part] = node
+				} else if !seen[part] {
+					seen[part] = true
+					kids = append(kids, node)
 				}
 			}
 			if n == len(parts)-1 {
 				node.hash = e.Hash
 				node.mode = e.Mode
 			}
-		}
-	}
-
-	var kids []*indexNode
-	topLevel := map[string]bool{}
-	for _, e := range idx.Entries {
-		first, _, _ := strings.Cut(e.Name, "/")
-		if !topLevel[first] {
-			topLevel[first] = true
-			kids = append(kids, nodes[first])
 		}
 	}
 
@@ -508,10 +501,7 @@ func LatestSemverTag(repo *git.Repository) (string, error) {
 		if m == nil {
 			return nil
 		}
-		v, err := parseSemver(m[1], m[2], m[3])
-		if err != nil {
-			return nil
-		}
+		v := parseSemver(m[1], m[2], m[3])
 		if best == nil || semverLess(best, v) {
 			best = v
 			bestRaw = name
@@ -539,30 +529,29 @@ func NextSemverTag(latest string) string {
 
 // CreateTag creates an annotated tag pointing at hash, using message as the
 // tag message and id as the tagger identity. It returns the created reference.
+// CreateTag creates an annotated tag pointing at hash, using message as the
+// tag message and id as the tagger identity. It returns the created reference.
 func CreateTag(repo *git.Repository, hash plumbing.Hash, name, message string, id Identity) (*plumbing.Reference, error) {
 	if err := ensureTagAbsent(repo, name); err != nil {
 		return nil, err
 	}
-	tagObj, err := buildTagObject(name, hash, message, id, "")
+	payload, err := tagPayload(name, hash, message, id)
 	if err != nil {
 		return nil, err
 	}
-	tagHash, err := storeTagObject(repo, tagObj)
+	tagHash, err := storeTagObject(repo, payload)
 	if err != nil {
 		return nil, err
 	}
-	ref := plumbing.NewHashReference(plumbing.NewTagReferenceName(name), tagHash)
-	if err := repo.Storer.SetReference(ref); err != nil {
-		return nil, fmt.Errorf("set tag ref %s: %w", name, err)
-	}
-	return ref, nil
+	return setTagRef(repo, name, tagHash)
 }
 
 // SignedTag creates an annotated tag like CreateTag but embeds an armored SSH
 // signature, mirroring "git tag -s" with the ssh format. The signature covers
 // the full tag object content (object/type/tag/tagger/message) exactly as git
 // signs it; the armored block is appended after the message, which is how git
-// stores signed tags.
+// stores signed tags. The payload is built once and both signed and stored, so
+// the signature always matches the stored object byte-for-byte.
 func SignedTag(repo *git.Repository, hash plumbing.Hash, name, message string, id Identity, armoredSign func([]byte) ([]byte, error)) (*plumbing.Reference, error) {
 	if err := ensureTagAbsent(repo, name); err != nil {
 		return nil, err
@@ -575,14 +564,17 @@ func SignedTag(repo *git.Repository, hash plumbing.Hash, name, message string, i
 	if err != nil {
 		return nil, fmt.Errorf("sign tag payload: %w", err)
 	}
-	tagObj, err := buildTagObject(name, hash, message, id, string(armored))
+	sig := strings.TrimSuffix(string(armored), "\n")
+	content := append(payload, []byte(sig+"\n")...)
+	tagHash, err := storeTagObject(repo, content)
 	if err != nil {
 		return nil, err
 	}
-	tagHash, err := storeTagObject(repo, tagObj)
-	if err != nil {
-		return nil, err
-	}
+	return setTagRef(repo, name, tagHash)
+}
+
+// setTagRef creates the refs/tags/<name> reference pointing at tagHash.
+func setTagRef(repo *git.Repository, name string, tagHash plumbing.Hash) (*plumbing.Reference, error) {
 	ref := plumbing.NewHashReference(plumbing.NewTagReferenceName(name), tagHash)
 	if err := repo.Storer.SetReference(ref); err != nil {
 		return nil, fmt.Errorf("set tag ref %s: %w", name, err)
@@ -627,17 +619,6 @@ func tagPayload(name string, target plumbing.Hash, message string, id Identity) 
 
 // buildTagObject assembles the full tag object content, optionally with a
 // trailing armored signature block.
-func buildTagObject(name string, target plumbing.Hash, message string, id Identity, signature string) ([]byte, error) {
-	payload, err := tagPayload(name, target, message, id)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(signature) == "" {
-		return payload, nil
-	}
-	sig := strings.TrimSuffix(signature, "\n")
-	return append(payload, []byte(sig+"\n")...), nil
-}
 
 // storeTagObject writes raw tag object bytes into the object database and
 // returns the new object's hash.
@@ -669,20 +650,17 @@ type semver struct {
 	major, minor, patch int
 }
 
-func parseSemver(major, minor, patch string) (*semver, error) {
-	maj, err := strconv.Atoi(major)
-	if err != nil {
-		return nil, err
+func parseSemver(major, minor, patch string) *semver {
+	return &semver{
+		major: mustAtoi(major),
+		minor: mustAtoi(minor),
+		patch: mustAtoi(patch),
 	}
-	min, err := strconv.Atoi(minor)
-	if err != nil {
-		return nil, err
-	}
-	p, err := strconv.Atoi(patch)
-	if err != nil {
-		return nil, err
-	}
-	return &semver{major: maj, minor: min, patch: p}, nil
+}
+
+func mustAtoi(s string) int {
+	v, _ := strconv.Atoi(s)
+	return v
 }
 
 // semverLess reports whether a is strictly older than b.

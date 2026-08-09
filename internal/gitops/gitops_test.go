@@ -517,17 +517,31 @@ func TestSignedTagRoundTrip(t *testing.T) {
 		t.Errorf("signature not armored: %q", obj.PGPSignature)
 	}
 
-	// Rebuild the signed payload and verify.
-	payload, err := tagPayload("v0.0.1", h, "signed release", id)
-	if err != nil {
-		t.Fatalf("tagPayload: %v", err)
+	// Rebuild the signed payload from the STOREED tag object's fields so the
+	// verification uses the exact tagger timestamp that was committed, not a
+	// freshly generated time.Now().
+	var payload bytes.Buffer
+	fmt.Fprintf(&payload, "object %s\n", obj.Target)
+	fmt.Fprintf(&payload, "type %s\n", obj.TargetType.Bytes())
+	fmt.Fprintf(&payload, "tag %s\n", obj.Name)
+	payload.WriteString("tagger ")
+	if err := obj.Tagger.Encode(&payload); err != nil {
+		t.Fatalf("encode tagger: %v", err)
 	}
+	payload.WriteString("\n\n")
+	msg := strings.TrimSpace(obj.Message)
+	if msg == "" {
+		msg = "update"
+	}
+	payload.WriteString(msg)
+	payload.WriteString("\n")
+
 	sig, err := sshsig.Unarmor([]byte(obj.PGPSignature))
 	if err != nil {
 		t.Fatalf("Unarmor: %v", err)
 	}
 	if err := sshsig.Verify(
-		strings.NewReader(string(payload)), sig,
+		strings.NewReader(payload.String()), sig,
 		sshPriv.PublicKey(), sign.HashAlgorithm, sign.Namespace,
 	); err != nil {
 		t.Fatalf("verify tag signature: %v", err)

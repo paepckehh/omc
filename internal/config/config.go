@@ -61,21 +61,17 @@ func FromEnv() Config {
 // would otherwise be passed through verbatim and fail to open. A path that
 // is empty or does not start with "~" is returned unchanged.
 func expandTilde(path string) string {
-	if path == "" {
+	if !strings.HasPrefix(path, "~") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
 		return path
 	}
 	if path == "~" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return path
-		}
 		return home
 	}
 	if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return path
-		}
 		return home + path[1:]
 	}
 	return path

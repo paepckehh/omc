@@ -403,12 +403,9 @@ func (u *UI) Info(format string, args ...any) {
 	u.emit(u.Err, "INFO", "", msg)
 }
 
-// Infof is retained for backward compatibility; it is an alias for Info.
-func (u *UI) Infof(format string, args ...any) { u.Info(format, args...) }
-
-// Printf prints program output to stdout (unchanged from the original API).
-func (u *UI) Printf(format string, args ...any) {
-	fmt.Fprintf(u.Out, format, args...)
+// Println writes a pre-formatted line to stdout.
+func (u *UI) Println(s string) {
+	fmt.Fprintln(u.Out, s)
 }
 
 // println writes a line terminated string to w.
@@ -450,11 +447,6 @@ func (u *UI) CleanTree() {
 // report before exit.
 func (u *UI) Error(err error) {
 	u.emit(u.Err, "FAIL", "", err.Error())
-}
-
-// Println writes a pre-formatted line to stdout.
-func (u *UI) Println(s string) {
-	fmt.Fprintln(u.Out, s)
 }
 
 // FileList renders a compact bullet list of changed file paths under a header.
