@@ -1,43 +1,118 @@
+<div align="center">
+
 # ocommit
 
 **One command. No flags. Signed, AI-described commits your team can actually trust.**
 
-`ocommit` is a plain, stupid-simple single binary, dependency free git auto commit utility
-written in pure Go. It takes **zero command line arguments** — every behavior is an environment
+`ocommit` is a plain, stupid-simple git auto-commit utility written in pure Go.
+It takes **zero command line arguments** — every behavior is an environment
 variable — and inside any git working tree it does the equivalent of:
 
 ```console
 git add -A && git commit -asm <detailed llm generated commit message content> && git log
 ```
 
-When a local [Ollama] instance is running, `ocommit` reads the staged diff, writes a detailed
-commit body, and boils it down to a crisp TL;DR subject. And when you hand it an SSH key, the
-commit comes out cryptographically signed — in real git SSH format that
-`git log --show-signature` and `git verify-commit` accept.
+[![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Pure Go](https://img.shields.io/badge/Pure_Go-no_git_binary-7DD3FC?logo=go&logoColor=white)](https://github.com/paepckehh/ocommit)
+[![License: MIT](https://img.shields.io/badge/License-MIT-22C55E?logo=opensourceinitiative&logoColor=white)](LICENSE)
+[![Static Binary](https://img.shields.io/badge/Binary-static-F59E0B?logo=go&logoColor=white)](https://github.com/paepckehh/ocommit)
+[![No Telemetry](https://img.shields.io/badge/Telemetry-none-EF4444?logo=privatedirection&logoColor=white)](#environment-only-design)
 
-[![Go Version](https://img.shields.io/github/go-mod/go-version/your-org/ocommit)](https://go.dev/)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Pure Go](https://img.shields.io/badge/pure%20go-100%25-29BEB0.svg)](go.mod)
-[![Go Report Card](https://goreportcard.com/badge/go/paepcke.de/ocommit)](https://goreportcard.com/report/go/paepcke.de/ocommit)
+[Features](#-features) · [Quick Start](#-quick-start) · [Demo](#-demo) · [Why](#-why-another-commit-tool) · [Agentic Workflows](#-secure-agentic-workflows) · [How it works](#-how-it-works)
+
+</div>
 
 ---
 
-## Why another commit tool?
+## ✨ Features
 
-Commit hygiene is a **security control**, not a style preference. Signed,
-meaningful commits are how you:
+<table>
+<tr>
+<td width="50%" valign="top">
 
-- **Hold agents accountable** — every change is attributable to a key you control.
-- **Keep history readable** — "fix typo in login" becomes `fix: harden the login
-  flow against timing attacks`.
-- **Guard the supply chain** — a break in the signing chain is a break in the
-  trust your `main` depends on.
+### 🚫 Zero arguments, zero TTY
+Every option is an environment variable, so it composes in scripts, aliases, pre-commit hooks, and — critically — inside an **unattended agent** that has no keyboard and must not be asked for one.
 
-The problem: your AI coding agent happily runs `git commit`, but you don't want
-it holding the same keys you use to **push** to the remote. `ocommit` solves
-exactly that — details under [Secure agentic workflows](#secure-agentic-workflows).
+</td>
+<td width="50%" valign="top">
 
-## Demo
+### 🟢 Native git in Go
+Repository discovery, `git add -A`, unified diffs, commit creation, and `git log` all run through [go-git]. No external `git` process at runtime — only one static binary.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 🔑 SSH-signed commits
+Point `OCOMMIT_KEY_PATH` at an SSH private key and the commit carries an armored `BEGIN SSH SIGNATURE` header, byte-compatible with `git commit -S`. `git log --show-signature` and `git verify-commit` confirm it.
+
+</td>
+<td width="50%" valign="top">
+
+### 🤖 AI commit messages
+With `OLLAMA_DESC_URL` set, the staged diff is sent to your **local** model twice: once for a rich explanatory body, once to condense it into a one-line, imperative TL;DR. Your code never leaves your machine.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 👤 Flexible identity
+`OCOMMIT_NAME`/`OCOMMIT_EMAIL` win, then the standard `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables, then the repo's git config, then a built-in default.
+
+</td>
+<td width="50%" valign="top">
+
+### 🛡️ Always does the right, minimal thing
+No repo → clear error. No Ollama → `update`. No key → unsigned. It never leaves a task half-done over infrastructure.
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🚀 Quick Start
+
+> Run from **anywhere inside a repo**. That's it.
+
+```console
+go run paepcke.de/ocommit/cmd/ocommit@latest
+```
+
+### Install
+
+```console
+go install paepcke.de/ocommit/cmd/ocommit@latest
+```
+
+Or build from source:
+
+```console
+git clone https://github.com/paepckehh/ocommit
+cd ocommit
+make build
+sudo install -m0755 ocommit /usr/local/bin/
+```
+
+### Run
+
+```console
+export OLLAMA_DESC_URL=http://127.0.0.1:11434   # optional: AI messages
+export OCOMMIT_KEY_PATH=~/.ssh/agent            # optional: SSH signing
+ocommit
+```
+
+### Requirements
+
+- Go 1.26+ to build (the binary itself is a single static executable).
+- **Optional**: a running [Ollama] server for AI-generated commit messages.
+- **Optional**: an SSH private key to sign commits.
+
+---
+
+## 🎬 Demo
 
 When stderr is a terminal, `ocommit` renders a small, modern TUI built on
 [charmbracelet/bubbles] + [lipgloss]: animated spinners per pipeline step,
@@ -92,74 +167,47 @@ ocommit: committed 9d3f2ab
 No arguments were typed. No `git` binary was spawned. No prompts were answered.
 Everything that matters came from the environment.
 
-## Requirements
+---
 
-- Go 1.26+ to build (the binary itself is a single static executable).
-- **Optional**: a running [Ollama] server for AI-generated commit messages.
-- **Optional**: an SSH private key to sign commits.
+## 🤔 Why another commit tool?
 
-## Run
+Commit hygiene is a **security control**, not a style preference. Signed,
+meaningful commits are how you:
 
-```console
-go run paepcke.de/ocommit/cmd/ocommit@latest
-```
+- **Hold agents accountable** — every change is attributable to a key you control.
+- **Keep history readable** — "fix typo in login" becomes `fix: harden the login
+  flow against timing attacks`.
+- **Guard the supply chain** — a break in the signing chain is a break in the
+  trust your `main` depends on.
 
-## Install
-
-```console
-go install paepcke.de/ocommit/cmd/ocommit@latest
-```
-
-Or build from source:
-
-```console
-git clone https://github.com/your-org/ocommit
-cd ocommit
-make build      
-sudo install -m0755 ocommit /usr/local/bin/
-```
-
-Then just:
-
-```console
-ocommit
-```
-
-From anywhere inside a repo. That's it.
-
-## Features
-
-- **Zero arguments, zero TTY.** Every option is an environment variable, so it
-  composes in scripts, aliases, pre-commit hooks, and — critically — inside an
-  **unattended agent** that has no keyboard and must not be asked for one.
-- **Native git in Go.** Repository discovery, `git add -A`, unified diffs,
-  commit creation, and `git log` all run through [go-git]. No external `git`
-  process at runtime — only one static binary.
-- **SSH-signed commits.** Point `OCOMMIT_KEY_PATH` at an SSH private key and
-  the commit carries an armored `BEGIN SSH SIGNATURE` header, byte-compatible
-  with `git commit -S`. `git log --show-signature` and `git verify-commit`
-  confirm it. If the key is configured but unusable, `ocommit` logs why and
-  proceeds unsigned — it degrades, it never blocks.
-- **AI commit messages.** With `OLLAMA_DESC_URL` set, the staged diff is sent
-  to your local model twice: once for a rich explanatory body, once to condense
-  it into a one-line, imperative TL;DR that becomes the subject. If the server
-  is down, it warns and falls back to `update`. Your code never leaves your
-  machine.
-- **Flexible identity.** `OCOMMIT_NAME`/`OCOMMIT_EMAIL` win, then the standard
-  `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables, then the repo's git config, then
-  a built-in default.
-- **Always does the right, minimal thing.** No repo → clear error. No Ollama →
-  `update`. No key → unsigned. It never leaves a task half-done over infrastructure.
+The problem: your AI coding agent happily runs `git commit`, but you don't want
+it holding the same keys you use to **push** to the remote. `ocommit` solves
+exactly that — details under [Secure agentic workflows](#-secure-agentic-workflows).
 
 ---
 
-## Secure agentic workflows
+## 🧭 Table of Contents
+
+- [Features](#-features)
+- [Quick Start](#-quick-start)
+- [Demo](#-demo)
+- [Why another commit tool?](#-why-another-commit-tool)
+- [Secure agentic workflows](#-secure-agentic-workflows)
+- [Usage](#-usage)
+- [How it works](#-how-it-works)
+- [Environment-only design](#-environment-only-design)
+- [Development](#-development)
+- [License](#-license)
+
+---
+
+## 🛡️ Secure agentic workflows
 
 This is the scenario `ocommit` was built for. You're running an AI coding agent
 — Cursor, Claude Code, Crush, a CI bot — and you want it to *commit* without
 giving it the power to *publish*.
 
-`ocommit` makes **separation of duties** trivial:
+`ocommit` makes **separation of duties** trivial.
 
 ### 1. Separate signing keys from push keys (rights separation)
 
@@ -173,7 +221,7 @@ ocommit
 
 The **push** to the remote uses a *different* credential — your human
 `~/.ssh/id_ed25519`, a deploy key, or a short-lived CI token — that the agent
-never sees. The result:
+never sees.
 
 | Activity | Credential | Holder |
 | -------- | ---------- | ------ |
@@ -224,7 +272,9 @@ forever in history.
 - **Local-first AI** — the LLM talks to Ollama over localhost; your code, diffs,
   and commit bodies never touch a third-party API.
 
-## Usage
+---
+
+## 📖 Usage
 
 All behavior is opt-in via environment variables. Nothing else.
 
@@ -245,7 +295,8 @@ ocommit
 > is your friend. Scheduling note for CI: protect that key with filesystem
 > permissions and rotate it like any credential.
 
-### AI message flow
+<details>
+<summary><b>🤖 AI message flow — how the commit body is generated</b></summary>
 
 When `OLLAMA_DESC_URL` is set **and** the server answers `/api/tags`:
 
@@ -257,11 +308,46 @@ When `OLLAMA_DESC_URL` is set **and** the server answers `/api/tags`:
    (max 72 chars, imperative mood).
 4. The TL;DR becomes the subject; the full details follow below it.
 
+The final message format is:
+
+```
+<TL;DR subject, ≤72 chars>
+
+<full detailed description from the LLM>
+```
+
+- First line: the shortened TL;DR (LLM) or `update` (fallback or no Ollama).
+- Blank line, then the full detail body.
+- When signing, an SSH signature header is embedded in the commit object;
+  the payload signed is the commit without that header (git-conformant).
+- The body is optional: if the LLM returns only a subject, that is used.
+
 If the server is unreachable or generation fails, `ocommit` logs a warning and
 falls back to the default subject `update` — it never blocks a commit on the
 network.
 
-## How it works
+</details>
+
+<details>
+<summary><b>👤 Git identity resolution order</b></summary>
+
+`internal/gitops.ResolveIdentity()` resolves the commit identity in this order:
+
+1. `OCOMMIT_NAME` / `OCOMMIT_EMAIL` (ocommit's own variables)
+2. `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` then `GIT_COMMITTER_*` (standard git
+   variables)
+3. `user.name` / `user.email` from the repository's git config (read via
+   go-git, no external binary)
+4. Defaults: `OCOMMIT, Git Commiter <git@ocommit.local>`
+
+Environment always wins over git config. Config files are only consulted for
+the identity fallback; nothing else depends on them.
+
+</details>
+
+---
+
+## ⚙️ How it works
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -272,7 +358,7 @@ network.
 │  3. build staged diff    (HEAD tree → index tree)            │
 │  4. optional: Ollama two-pass message generation             │
 │  5. optional: SSH sign   (hiddeco/sshsig, "git" ns, sha512)  │
-│  6. create commit        (object.Commit, advance HEAD)       │
+│  6. create commit        (object.Commit, advance HEAD)        │
 │  7. print git log                                            │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -284,7 +370,24 @@ commit that `git log --show-signature` and `git verify-commit` accept. `ocommit`
 builds its own trees from the index, byte-identical to what git would write, so
 verification never hiccups.
 
-## Environment-only design
+<details>
+<summary><b>🏗️ Where things live (project layout)</b></summary>
+
+```
+cmd/ocommit/            entry point (env → pipeline → output)
+internal/config/        config.FromEnv() reads the five env vars
+internal/gitops/        PlainOpen detection, StageAll, StagedDiff, Commit,
+                        SignedCommit, Log, ResolveIdentity, index→tree writer
+internal/sign/          sign.Load(keyPath), signer.Sign(payload) → armored SSH sig
+internal/ollama/        Client.Available(), DescribeDetail(), SummarizeTLDR()
+internal/output/        UI: stdout = results, stderr = diagnostics
+```
+
+</details>
+
+---
+
+## 🌍 Environment-only design
 
 `ocommit` deliberately parses no command line parameters because it's built for
 places a human isn't watching:
@@ -296,7 +399,9 @@ places a human isn't watching:
 - **Air-gapped by default** — the only network call is to your own Ollama, so the
   tool ships no telemetry and phones no home.
 
-## Development
+---
+
+## 🛠️ Development
 
 ```console
 make test        # go test ./...
@@ -304,22 +409,47 @@ make build       # go build -o ocommit ./cmd/ocommit
 make vet         # go vet ./...
 ```
 
-Layout:
+<details>
+<summary><b>🧪 Testing notes</b></summary>
 
-```
-cmd/ocommit/            entry point (env → pipeline → output)
-internal/config/        env var config
-internal/gitops/        repo detection, staging, diff, commit, log
-internal/sign/          SSH key loading + armored signing
-internal/ollama/        Ollama REST client + prompt template
-internal/output/        stream-appropriate formatting
-```
+- `go test ./...` — full suite (config, sign, ollama, gitops, binary e2e).
+- `-short` skips the binary e2e test that compiles the CLI.
+- Tests use `t.TempDir()` + `os.Chdir(dir)`; they create real git repos with
+  `git.PlainInit` and never shell out to git except the e2e binary test (which
+  skips if `git` is unavailable).
+- `writeIndexTree` builds tree objects from the index; it must produce trees
+  byte-identical to git so that `git log --show-signature` and `git
+  verify-commit` accept signed commits.
+- Always run `go vet ./...` after changes.
 
-## License
+</details>
+
+<details>
+<summary><b>🧭 Worktree / OS notes</b></summary>
+
+- Repositories are opened with `PlainOpenWithOptions(DetectDotGit: true)`
+  from the current directory — subdirectories work.
+- Not being in a repo is an error.
+- If the key file is missing/invalid when configured, log a warning and commit
+  unsigned. If Ollama is unreachable or the LLM call fails, fall back to the
+  default subject `update` and continue.
+
+</details>
+
+---
+
+## 📄 License
 
 MIT. See [LICENSE](LICENSE).
+
+<div align="center">
+
+<sub>Built with [go-git] · [charmbracelet/bubbles] · [lipgloss] · [hiddeco/sshsig] · [Ollama]</sub>
+
+</div>
 
 [Ollama]: https://ollama.com
 [go-git]: https://github.com/go-git/go-git
 [charmbracelet/bubbles]: https://github.com/charmbracelet/bubbles
 [lipgloss]: https://github.com/charmbracelet/lipgloss
+[hiddeco/sshsig]: https://github.com/hiddeco/sshsig
