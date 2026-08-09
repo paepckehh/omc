@@ -34,41 +34,66 @@ import (
 	"paepcke.de/ocommit/internal/output"
 	"paepcke.de/ocommit/internal/sign"
 
+	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
-func main() {
-	os.Exit(run())
-}
+func main() { os.Exit(run()) }
 
 func run() int {
 	ui := output.New(os.Stdout, os.Stderr)
 	cfg := config.FromEnv()
 
 	// 1. Find the repository we are inside of.
-	repo, wt, err := gitops.Open()
-	if err != nil {
-		return fail(ui, err)
+	var (
+		repo *git.Repository
+		wt   *git.Worktree
+	)
+	if err := ui.Step("open", "detecting repository", func() error {
+		r, w, err := gitops.Open()
+		if err != nil {
+			return err
+		}
+		repo, wt = r, w
+		return nil
+	}); err != nil {
+		ui.Error(err)
+		return 1
 	}
 
 	// 2. Stage everything ("git add -A").
-	ui.Infof("ocommit: staging all changes")
-	if err := gitops.StageAll(wt); err != nil {
-		return fail(ui, err)
+	if err := ui.Step("stage", "staging all changes", func() error {
+		return gitops.StageAll(wt)
+	}); err != nil {
+		ui.Error(err)
+		return 1
 	}
 
 	// 3. Build the staged diff for the LLM and for the user.
-	ui.Infof("ocommit: reading staged diff")
-	diffText, files, err := gitops.StagedDiff(repo, wt)
-	if err != nil {
-		return fail(ui, err)
+	var (
+		diffText string
+		files    []string
+	)
+	if err := ui.Step("diff", "reading staged diff", func() error {
+		d, f, err := gitops.StagedDiff(repo, wt)
+		if err != nil {
+			return err
+		}
+		diffText, files = d, f
+		return nil
+	}); err != nil {
+		ui.Error(err)
+		return 1
 	}
 
 	// 3b. Nothing to commit: inform and exit cleanly.
 	if strings.TrimSpace(diffText) == "" {
-		ui.Infof("ocommit: nothing to commit, working tree clean")
+		ui.CleanTree()
 		return 0
 	}
+
+	// Show the changed file list as a compact diagnostic.
+	ui.FileList(files)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -77,61 +102,101 @@ func run() int {
 	msg := gitops.CommitMessage{Subject: "update"}
 	if cfg.OllamaURL != "" {
 		client := ollama.New(cfg.OllamaURL, cfg.OllamaModel)
-		if client.Available(ctx) {
-			ui.Infof("ocommit: ollama reachable at %s, generating commit message", cfg.OllamaURL)
-			if msg, err = generateMessage(ctx, client, diffText, files); err != nil {
-				ui.Infof("ocommit: warning: llm message generation failed: %v", err)
+		if reachable := ollamaReachable(ui, ctx, client, cfg.OllamaURL); reachable {
+			var genErr error
+			msg, genErr = generateMessageProgress(ui, ctx, client, diffText, files)
+			if genErr != nil {
+				ui.Warn("llm message generation failed: %v", genErr)
 				msg = gitops.CommitMessage{Subject: "update"}
 			}
 		} else {
-			ui.Infof("ocommit: Ollama not reachable at %s, using default message", cfg.OllamaURL)
+			ui.Warn("ollama not reachable at %s, using default message", cfg.OllamaURL)
 		}
 	}
+
+	// Preview the resolved commit message.
+	ui.Summary(msg.Subject, msg.Body)
 
 	// 5. Sign the commit with the configured SSH key (opt-in).
 	var signer *sign.Signer
 	if cfg.KeyPath != "" {
-		signer, err = sign.Load(cfg.KeyPath)
-		if err != nil {
+		if err := ui.Step("load key", "loading ssh signing key", func() error {
+			s, err := sign.Load(cfg.KeyPath)
+			if err != nil {
+				return err
+			}
+			signer = s
+			return nil
+		}); err != nil {
 			// The user asked for signing but the key cannot be used:
 			// degrade to an unsigned commit and record why.
-			ui.Infof("ocommit: warning: ssh key %s unusable (%v); committing unsigned", cfg.KeyPath, err)
+			ui.Warn("ssh key %s unusable (%v); committing unsigned", cfg.KeyPath, err)
 			signer = nil
 		} else {
-			ui.Infof("ocommit: signing commit with ssh key %s", cfg.KeyPath)
+			ui.SigningNotice(cfg.KeyPath, true)
 		}
+	} else {
+		ui.SigningNotice("", false)
 	}
 
 	// 6. Create the commit, signing it when a key is available.
 	id := gitops.ResolveIdentity(repo)
 	var hash plumbing.Hash
-	if signer != nil {
-		ui.Infof("ocommit: committing (as %s <%s>, signed)", id.Name, id.Email)
-		hash, err = gitops.SignedCommit(repo, wt, msg, func(payload []byte) ([]byte, error) {
-			return signer.Sign(payload)
-		})
-	} else {
-		ui.Infof("ocommit: committing (as %s <%s>)", id.Name, id.Email)
-		hash, err = gitops.Commit(repo, wt, msg)
-	}
-	if err != nil {
-		return fail(ui, err)
+	commitErr := ui.Step("commit", commitLabel(id, signer != nil), func() error {
+		if signer != nil {
+			h, err := gitops.SignedCommit(repo, wt, msg, func(payload []byte) ([]byte, error) {
+				return signer.Sign(payload)
+			})
+			hash = h
+			return err
+		}
+		h, err := gitops.Commit(repo, wt, msg)
+		hash = h
+		return err
+	})
+	if commitErr != nil {
+		ui.Error(commitErr)
+		return 1
 	}
 
 	// 7. Show what was committed.
-	logOut, err := gitops.Log(repo, 5)
-	if err != nil {
-		return fail(ui, err)
+	var logOut string
+	if err := ui.Step("log", "reading recent history", func() error {
+		out, err := gitops.Log(repo, 5)
+		if err != nil {
+			return err
+		}
+		logOut = out
+		return nil
+	}); err != nil {
+		ui.Error(err)
+		return 1
 	}
-	ui.Printf("ocommit: committed %s\n%s", hash.String()[:7], logOut)
+
+	ui.CommitResult(hash.String()[:7], logOut)
 	return 0
 }
 
-// generateMessage performs the two-step LLM conversation: detailed
-// description, then TL;DR summary used as the commit subject. files is the
-// list of changed paths, used as a compact summary so the model can ground
-// its message in the file names without re-reading the whole diff twice.
-func generateMessage(ctx context.Context, client *ollama.Client, diff string, files []string) (gitops.CommitMessage, error) {
+// ollamaReachable probes Ollama while showing a spinner step. An unreachable
+// Ollama is not a pipeline failure (it is the normal degrade path), so the
+// step is reported as successful either way.
+func ollamaReachable(ui *output.UI, ctx context.Context, client *ollama.Client, url string) bool {
+	var ok bool
+	_ = ui.Step("ollama", "probing local ollama at "+url, func() error {
+		ok = client.Available(ctx)
+		return nil
+	})
+	return ok
+}
+
+// generateMessageProgress performs the two-step LLM conversation (detailed
+// description, then TL;DR summary) while showing a progress bar that advances
+// 0% -> 50% -> 100%. files is the list of changed paths, used as a compact
+// summary so the model can ground its message in the file names without
+// re-reading the whole diff twice.
+func generateMessageProgress(ui *output.UI, ctx context.Context, client *ollama.Client, diff string, files []string) (gitops.CommitMessage, error) {
+	ui.Progress("generating commit message", 0.0)
+
 	stat := "(no file changes)"
 	if len(files) > 0 {
 		var b strings.Builder
@@ -144,18 +209,26 @@ func generateMessage(ctx context.Context, client *ollama.Client, diff string, fi
 		}
 		stat = b.String()
 	}
+
 	detail, err := client.DescribeDetail(ctx, diff, stat)
 	if err != nil {
 		return gitops.CommitMessage{}, err
 	}
+	ui.Progress("condensing to TL;DR", 0.5)
+
 	tldr, err := client.SummarizeTLDR(ctx, detail)
 	if err != nil {
 		return gitops.CommitMessage{}, err
 	}
+	ui.Progress("commit message ready", 1.0)
+
 	return gitops.CommitMessage{Subject: tldr, Body: detail}, nil
 }
 
-func fail(ui *output.UI, err error) int {
-	ui.Infof("ocommit: %v", err)
-	return 1
+// commitLabel renders the step label shown while the commit is being created.
+func commitLabel(id gitops.Identity, signed bool) string {
+	if signed {
+		return "committing as " + id.Name + " <" + id.Email + "> (signed)"
+	}
+	return "committing as " + id.Name + " <" + id.Email + ">"
 }

@@ -39,15 +39,50 @@ exactly that — details under [Secure agentic workflows](#secure-agentic-workfl
 
 ## Demo
 
+When stderr is a terminal, `ocommit` renders a small, modern TUI built on
+[charmbracelet/bubbles] + [lipgloss]: animated spinners per pipeline step,
+a gradient progress bar for the two-stage LLM generation, and a styled
+commit-result block with the recent git log.
+
 ```console
 $ export OLLAMA_DESC_URL=http://127.0.0.1:11434
 $ export OCOMMIT_KEY_PATH=~/.ssh/agent
 $ ocommit
-ocommit: staging all changes
-ocommit: reading staged diff
-ocommit: ollama reachable at http://127.0.0.1:11434, generating commit message
+ ocommit  ✓ open
+ ocommit  ✓ stage
+ ocommit  ✓ diff
+ ocommit  › internal/ollama/ollama.go
+         › cmd/ocommit/main.go
+ ocommit  ✓ ollama probing local ollama at http://127.0.0.1:11434
+ ocommit  generating commit message ████████████████████████████
+ ocommit  condensing to TL;DR        ████████████
+ ocommit  commit message ready       ████████████████████████████
+ ocommit  commit message:
+ sign commit payloads with git's SSH signature format
+ - Adds an armored BEGIN SSH SIGNATURE header to the commit object...
+ ocommit  ✓ load key
+ ocommit  🔑 signing with /home/me/.ssh/agent
+ ocommit  ✓ commit  committing as Ada Lovelace <ada@example.com> (signed)
+ ocommit  ✓ log
+ ocommit  ✓ committed 9d3f2ab
+9d3f2ab  Ada Lovelace <ada@example.com>  2026-08-08
+    sign commit payloads with git's SSH signature format
+    signed: yes
+```
+
+Piped or non-interactive output (CI logs, captured tests) automatically falls
+back to the original greppable line format:
+
+```console
+$ ocommit
+ocommit: open detecting repository
+ocommit: stage staging all changes
+ocommit: diff reading staged diff
+ocommit: ollama probing local ollama at http://127.0.0.1:11434
+ocommit: ollama generating commit message 0%
+ocommit: ollama condensing to TL;DR 50%
+ocommit: ollama commit message ready 100%
 ocommit: signing commit with ssh key /home/me/.ssh/agent
-ocommit: committing (as Ada Lovelace <ada@example.com>, signed)
 ocommit: committed 9d3f2ab
 9d3f2ab  Ada Lovelace <ada@example.com>  2026-08-08
     sign commit payloads with git's SSH signature format
@@ -286,3 +321,5 @@ MIT. See [LICENSE](LICENSE).
 
 [Ollama]: https://ollama.com
 [go-git]: https://github.com/go-git/go-git
+[charmbracelet/bubbles]: https://github.com/charmbracelet/bubbles
+[lipgloss]: https://github.com/charmbracelet/lipgloss
