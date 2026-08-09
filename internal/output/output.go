@@ -220,11 +220,19 @@ func (u *UI) emit(w io.Writer, level, step, msg string, fields ...Field) {
 		var b strings.Builder
 		b.WriteString(ts)
 		b.WriteByte(' ')
+		if e := StateEmoji(level); e != "" {
+			b.WriteString(e)
+			b.WriteByte(' ')
+		}
 		b.WriteString(level)
 		b.WriteString(" ")
 		b.WriteString(Brand)
 		if step != "" {
 			b.WriteByte(' ')
+			if e := ActionEmoji(step); e != "" {
+				b.WriteString(e)
+				b.WriteByte(' ')
+			}
 			b.WriteString(step)
 		}
 		b.WriteByte(' ')
@@ -244,7 +252,7 @@ func (u *UI) emit(w io.Writer, level, step, msg string, fields ...Field) {
 		u.styles.brand.Render(Brand),
 	)
 	if step != "" {
-		parts = append(parts, u.styles.step.Render(step))
+		parts = append(parts, u.styles.step.Render(stepIcon(step)))
 	}
 	parts = append(parts, u.styles.msg.Render(msg))
 	if fieldStr != "" {
@@ -253,8 +261,17 @@ func (u *UI) emit(w io.Writer, level, step, msg string, fields ...Field) {
 	fmt.Fprintln(w, strings.Join(parts, " "))
 }
 
-// renderLevel maps a level token to its styled rendering.
+// renderLevel maps a level token to its styled rendering, decorated with
+// the matching state emoji.
 func renderLevel(s styles, level string) string {
+	if e := StateEmoji(level); e != "" {
+		return s.levelInfo.Render(e) + " " + levelToken(s, level)
+	}
+	return levelToken(s, level)
+}
+
+// levelToken renders the bare level token in its colored style.
+func levelToken(s styles, level string) string {
 	switch level {
 	case "OK":
 		return s.levelOK.Render("OK")
@@ -267,6 +284,15 @@ func renderLevel(s styles, level string) string {
 	default:
 		return s.levelInfo.Render(level)
 	}
+}
+
+// stepIcon returns the decorated step name "icon step" used by the styled
+// log line, falling back to the bare step name when no icon exists.
+func stepIcon(step string) string {
+	if e := ActionEmoji(step); e != "" {
+		return e + " " + step
+	}
+	return step
 }
 
 // --- Step runner with spinner -------------------------------------------------
@@ -313,9 +339,9 @@ func (u *UI) startSpinner(step, msg string) {
 	u.spinCtx = make(chan struct{})
 
 	ts := u.styles.timestamp.Render(now())
-	level := u.styles.levelInfo.Render("··")
+	level := u.styles.levelInfo.Render(StatePending + " ··")
 	brand := u.styles.brand.Render(Brand)
-	stepLbl := u.styles.step.Render(step)
+	stepLbl := u.styles.step.Render(stepIcon(step))
 	msgLbl := u.styles.msg.Render(msg)
 	fps := u.spin.Spinner.FPS
 	if fps <= 0 {
@@ -389,9 +415,9 @@ func (u *UI) Progress(caption string, ratio float64) {
 	cap := u.styles.progress.Render(caption)
 	u.println(u.Err, fmt.Sprintf("%s %s %s %s %s  %s",
 		u.styles.timestamp.Render(now()),
-		u.styles.levelInfo.Render("INFO"),
+		u.styles.levelInfo.Render(StatePending+" INFO"),
 		u.styles.brand.Render(Brand),
-		u.styles.step.Render("ollama"),
+		u.styles.step.Render(stepIcon("ollama")),
 		cap,
 		bar,
 	))
@@ -473,9 +499,9 @@ func (u *UI) FileList(files []string) {
 	}
 	header := fmt.Sprintf("%s %s %s %s %s",
 		u.styles.timestamp.Render(now()),
-		u.styles.levelInfo.Render("INFO"),
+		u.styles.levelInfo.Render("ℹ️ INFO"),
 		u.styles.brand.Render(Brand),
-		u.styles.step.Render("diff"),
+		u.styles.step.Render(stepIcon("diff")),
 		u.styles.muted.Render("changed files:"),
 	)
 	var lines []string
@@ -499,9 +525,9 @@ func (u *UI) Summary(subject, body string) {
 	}
 	head := fmt.Sprintf("%s %s %s %s %s",
 		u.styles.timestamp.Render(now()),
-		u.styles.levelInfo.Render("INFO"),
+		u.styles.levelInfo.Render("ℹ️ INFO"),
 		u.styles.brand.Render(Brand),
-		u.styles.step.Render("msg"),
+		u.styles.step.Render(stepIcon("msg")),
 		u.styles.muted.Render("commit message:"),
 	)
 	subj := u.styles.subject.Render(subject)

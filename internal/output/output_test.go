@@ -278,3 +278,54 @@ func TestTimestampPresent(t *testing.T) {
 		t.Errorf("missing HH:MM:SS timestamp prefix, got: %q", got)
 	}
 }
+
+func TestStateEmoji(t *testing.T) {
+	cases := map[string]string{
+		"OK":    "✅",
+		"INFO":  "ℹ️",
+		"WARN":  "⚠️",
+		"FAIL":  "❌",
+		"BOGUS": "",
+	}
+	for level, want := range cases {
+		if got := StateEmoji(level); got != want {
+			t.Errorf("StateEmoji(%q) = %q, want %q", level, got, want)
+		}
+	}
+}
+
+func TestActionEmoji(t *testing.T) {
+	cases := map[string]string{
+		"open":     "📂",
+		"stage":    "📥",
+		"diff":     "🔍",
+		"ollama":   "🤖",
+		"load key": "🔑",
+		"commit":   "📝",
+		"tag":      "🏷️",
+		"sign":     "✍️",
+		"msg":      "💬",
+		"unknown":  "",
+	}
+	for step, want := range cases {
+		if got := ActionEmoji(step); got != want {
+			t.Errorf("ActionEmoji(%q) = %q, want %q", step, got, want)
+		}
+	}
+}
+
+func TestEmitDecoratesStateAndAction(t *testing.T) {
+	ui, out, _ := newTestUI()
+	ui.CommitResult("9d3f2ab", true)
+	got := out.String()
+	if !strings.Contains(got, "✅") {
+		t.Errorf("missing ✅ state emoji on OK, got: %q", got)
+	}
+	if !strings.Contains(got, "📝 commit") {
+		t.Errorf("missing 📝 action emoji on commit step, got: %q", got)
+	}
+	// Text tokens must remain intact for greppability.
+	if !strings.Contains(got, "OK") || !strings.Contains(got, "commit") {
+		t.Errorf("text tokens lost: %q", got)
+	}
+}
