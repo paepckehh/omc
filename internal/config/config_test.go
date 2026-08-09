@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
 func TestFromEnv(t *testing.T) {
 	t.Setenv("OCOMMIT_KEY_PATH", "/keys/id_ed25519")
@@ -37,5 +41,48 @@ func TestFromEnvEmpty(t *testing.T) {
 	c := FromEnv()
 	if c.KeyPath != "" || c.OllamaURL != "" || c.OllamaModel != "" || c.Name != "" || c.Email != "" {
 		t.Errorf("expected all empty, got %+v", c)
+	}
+}
+
+func TestFromEnvExpandsTilde(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+
+	cases := []struct {
+		in, want string
+	}{
+		{"~/.ssh/agent", home + "/.ssh/agent"},
+		{"~/.ssh/", home + "/.ssh/"},
+		{"~", home},
+		{"", ""},
+		{"/abs/key", "/abs/key"},
+		{"relative/key", "relative/key"},
+		{"~user/key", "~user/key"}, // ~user is not expanded
+	}
+	for _, tc := range cases {
+		t.Run("path="+tc.in, func(t *testing.T) {
+			got := expandTilde(tc.in)
+			if got != tc.want {
+				t.Errorf("expandTilde(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFromEnvKeyPathTildeExpanded(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	t.Setenv("OCOMMIT_KEY_PATH", "~/.ssh/agent")
+	c := FromEnv()
+	want := home + "/.ssh/agent"
+	if c.KeyPath != want {
+		t.Errorf("KeyPath = %q, want %q", c.KeyPath, want)
+	}
+	if !strings.HasPrefix(c.KeyPath, "/") {
+		t.Errorf("KeyPath %q should be absolute after expansion", c.KeyPath)
 	}
 }
