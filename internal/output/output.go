@@ -103,6 +103,7 @@ type UI struct {
 	spin    spinner.Model
 	spinOn  bool
 	spinCtx chan struct{}
+	spinPct int
 }
 
 type styles struct {
@@ -308,6 +309,7 @@ func (u *UI) startSpinner(step, msg string) {
 		return
 	}
 	u.spinOn = true
+	u.spinPct = 0
 	u.spinCtx = make(chan struct{})
 
 	ts := u.styles.timestamp.Render(now())
@@ -333,9 +335,17 @@ func (u *UI) startSpinner(step, msg string) {
 					u.mu.Unlock()
 					return
 				}
+				// Simulated, always-looping progress: ignore real work,
+				// just climb 0..100 and wrap so the spinner always looks
+				// busy and exciting.
+				u.spinPct += 3
+				if u.spinPct > 100 {
+					u.spinPct = 0
+				}
 				u.spin, _ = u.spin.Update(spinner.TickMsg{Time: time.Now(), ID: u.spin.ID()})
 				frame := u.spin.View()
-				line := fmt.Sprintf("\r%s %s %s %s %s %s", ts, level, brand, frame, stepLbl, msgLbl)
+				pct := u.styles.progress.Render(fmt.Sprintf("%3d%%", u.spinPct))
+				line := fmt.Sprintf("\r%s %s %s %s %s %s %s", ts, level, brand, frame, pct, stepLbl, msgLbl)
 				// pad to clear trailing chars from a previous, longer frame.
 				fmt.Fprint(u.Err, line)
 				u.mu.Unlock()
