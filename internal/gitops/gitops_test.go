@@ -349,6 +349,55 @@ func TestNextSemverTag(t *testing.T) {
 	}
 }
 
+func TestValidSemverTag(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"v0.0.0", true},
+		{"v1.2.3", true},
+		{"v999.888.777", true}, // large jumps in all segments
+		{"0.1.2", true},        // bare, no leading v
+		{"v01.2.3", false},     // leading zero
+		{"v1.02.3", false},
+		{"v1.2.03", false},
+		{"v1.2.3-rc.1", false}, // pre-release suffix rejected
+		{"v1.2.3+build", false},
+		{"v1.2", false},     // missing segment
+		{"v1.2.3.4", false}, // extra segment
+		{"1.2.3.4", false},
+		{"vA.2.3", false},
+		{"", false},
+		{"v-1.2.3", false},
+	}
+	for _, c := range cases {
+		got := ValidSemverTag(c.in)
+		if got != c.want {
+			t.Errorf("ValidSemverTag(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestNormalizeTag(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"v1.2.3", "v1.2.3"},
+		{"1.2.3", "v1.2.3"}, // bare gets the v prefix
+		{"0.0.0", "v0.0.0"},
+		{"v0.0.0", "v0.0.0"},
+		{"v1.2.3-rc.1", "v1.2.3-rc.1"}, // invalid semver returned unchanged
+		{"not-a-tag", "not-a-tag"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		got := NormalizeTag(c.in)
+		if got != c.want {
+			t.Errorf("NormalizeTag(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestLatestSemverTagEmpty(t *testing.T) {
 	repo, _, _ := initTestRepo(t)
 	got, err := LatestSemverTag(repo)

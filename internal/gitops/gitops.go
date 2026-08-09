@@ -496,6 +496,36 @@ func indexOrder(n *indexNode) string {
 // ignored for patch bumping: the base version still determines the next tag.
 var semverRe = regexp.MustCompile(`^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)`)
 
+// strictSemverRe matches an entire string of the form vMAJOR.MINOR.PATCH
+// (leading "v" optional) where each numeric component has no leading zeros
+// except a lone 0. Pre-release suffixes and build metadata are rejected:
+// an override tag must be a clean base semver. Any magnitude is accepted, so
+// large jumps in any of the three segments (e.g. v999.0.0) are valid.
+var strictSemverRe = regexp.MustCompile(`^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$`)
+
+// ValidSemverTag reports whether name is a strict vMAJOR.MINOR.PATCH semver
+// tag (an optional leading "v", three non-negative components without
+// leading zeros, no pre-release/build suffix). It accepts arbitrarily large
+// values in all three segments.
+func ValidSemverTag(name string) bool {
+	return strictSemverRe.MatchString(name)
+}
+
+// NormalizeTag returns name with the conventional leading "v" added when it
+// is a bare MAJOR.MINOR.PATCH, so an override like "0.1.2" becomes "v0.1.2".
+// A name that already starts with "v" is returned unchanged. Names that do
+// not parse as strict semver are returned unchanged as well; callers are
+// expected to gate this on ValidSemverTag first.
+func NormalizeTag(name string) string {
+	if strings.HasPrefix(name, "v") {
+		return name
+	}
+	if strictSemverRe.MatchString(name) {
+		return "v" + name
+	}
+	return name
+}
+
 // LatestSemverTag scans all refs under refs/tags/ and returns the highest
 // semver tag name (including the leading "v"). When no semver tag exists it
 // returns "" and a nil error; the caller then bumps the zero version.

@@ -73,13 +73,24 @@ No repo → clear error. No Ollama → `update`. No key → unsigned. It never l
 <td width="50%" valign="top">
 
 ### 🏷️ Auto semver tagging
-Every successful commit is immediately tagged with the next patch version (`vX.Y.N+1`). The latest `v*.*.*` tag is discovered, the patch is bumped, and an annotated tag is created on the new commit — SSH-signed when a key is configured, just like the commit itself.
+Every successful commit is immediately tagged with the next patch version (`vX.Y.N+1`). The latest `v*.*.*` tag is discovered, the patch is bumped, and an annotated tag is created on the new commit — SSH-signed when a key is configured, just like the commit itself. Set `OCOMMIT_TAG` to name the tag yourself.
 
 </td>
 <td width="50%" valign="top">
 
+### ✏️ Message & tag overrides
+Set `OCOMMIT_SUBJECT` / `OCOMMIT_MESSAGE` to bypass the LLM and write the commit text yourself, and `OCOMMIT_TAG` to name the tag. Perfect for pipelines that already know what the change is. Subject-only → subject doubles as the body; message-only → first line becomes the subject.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
 ### 🔁 Idempotent & predictable
 No flags to remember, no prompts to answer. Run it twice, get two commits and two bumped tags (`v0.0.1`, then `v0.0.2`). Tags never collide; the patch always advances.
+
+</td>
+<td width="50%" valign="top">
 
 </td>
 </tr>
@@ -306,6 +317,9 @@ ocommit
 | `OLLAMA_DESC_MODEL` | Ollama model name (optional). Defaults to `llama3.2`. |
 | `OCOMMIT_NAME` | Commit author/committer name (optional). Falls back to git config, then `OCOMMIT, Git Commiter`. |
 | `OCOMMIT_EMAIL` | Commit author/committer email (optional). Falls back to git config, then `git@ocommit.local`. |
+| `OCOMMIT_SUBJECT` | Override the commit subject. When set, **no LLM generation runs**. See [Message & tag overrides](#-message--tag-overrides). |
+| `OCOMMIT_MESSAGE` | Override the commit body. When set, **no LLM generation runs**. See [Message & tag overrides](#-message--tag-overrides). |
+| `OCOMMIT_TAG` | Override the tag name. Used only when it is strict semver `vMAJOR.MINOR.PATCH`; otherwise the auto-bump runs. See [Message & tag overrides](#-message--tag-overrides). |
 
 > **Signing:** only passphrase-less keys are supported (there is no interactive
 > prompt, by design). `ssh-keygen -t ed25519 -N "" -C agent@paepcke.de -f ~/.ssh/agent`
@@ -346,18 +360,63 @@ network.
 </details>
 
 <details>
+<summary><b>✏️ Message & tag overrides — OCOMMIT_SUBJECT / OCOMMIT_MESSAGE / OCOMMIT_TAG</b></summary>
+
+Sometimes you already know what the commit (or the tag) should say — the LLM
+should not run. `ocommit` reads three optional override variables from the
+environment, and **any** of them skips the Ollama two-pass generation:
+
+```console
+OCOMMIT_SUBJECT="feat: harden login against timing attacks" \
+OCOMMIT_MESSAGE="Adds constant-time comparison for the token check, ..."   \
+OCOMMIT_TAG="v1.4.0" \
+ocommit
+```
+
+### Subject / message pairing rules
+
+| `OCOMMIT_SUBJECT` | `OCOMMIT_MESSAGE` | Subject used | Body used |
+| ------------------ | ----------------- | ------------ | --------- |
+| set | set | `OCOMMIT_SUBJECT` | `OCOMMIT_MESSAGE` |
+| set | unset | `OCOMMIT_SUBJECT` | `OCOMMIT_SUBJECT` |
+| unset | set | first line of `OCOMMIT_MESSAGE` (≤72 chars) | full `OCOMMIT_MESSAGE` |
+| unset | unset | LLM TL;DR (or `update`) | LLM detail |
+
+Whitespace around the values is trimmed. When only `OCOMMIT_MESSAGE` is set,
+its first non-empty line becomes the subject (mirroring the ≤72-char TL;DR
+contract the LLM path uses); the full message is still kept as the body.
+
+### Tag override
+
+`OCOMMIT_TAG` names the tag explicitly instead of bumping the patch of the
+latest semver tag. It is used **only** when it parses as strict semver
+`vMAJOR.MINOR.PATCH` — an optional leading `v`, three non-negative integer
+segments without leading zeros, no pre-release/build suffix. Arbitrarily
+large values in any segment are accepted, so jumps like `v999.0.0` are fine.
+
+- A bare `1.2.3` is normalized to `v1.2.3`.
+- An invalid override (e.g. `v1.2`, `v1.2.3-rc.1`, `latest`, `v01.2.3`) is
+  **not** used: `ocommit` logs a warning and falls back to the normal
+  `LatestSemverTag` + `NextSemverTag` auto-bump. The commit is never rolled
+  back over a bad tag override.
+
+</details>
+
+<details>
 <summary><b>🏷️ Auto semver tagging — how the tag is created</b></summary>
 
-Immediately after a successful commit, `ocommit` tags that commit with the next
-patch-level semver tag:
+Immediately after a successful commit, `ocommit` tags that commit with a semver tag:
 
-1. All existing `refs/tags/v*.*.*` refs are scanned; the highest semver version
+1. If `OCOMMIT_TAG` is set and parses as strict semver `vMAJOR.MINOR.PATCH`,
+   that name (with a leading `v` added for bare versions) is used verbatim.
+   Otherwise the auto-bump path runs.
+2. All existing `refs/tags/v*.*.*` refs are scanned; the highest semver version
    is selected (pre-release suffixes like `-rc.1` are ignored for comparison).
-2. The patch segment is bumped by one (`v1.2.3` → `v1.2.4`). When no semver
+3. The patch segment is bumped by one (`v1.2.3` → `v1.2.4`). When no semver
    tag exists yet, the first tag is `v0.0.1`.
-3. An **annotated** tag object is created on the new commit. The tag message is
+4. An **annotated** tag object is created on the new commit. The tag message is
    the commit's subject line.
-4. When `OCOMMIT_KEY_PATH` is set and the key is valid, the tag is **SSH-signed**
+5. When `OCOMMIT_KEY_PATH` is set and the key is valid, the tag is **SSH-signed**
    with the same key used for the commit — the armored `BEGIN SSH SIGNATURE`
    block is embedded in the tag object, byte-compatible with `git tag -s`.
    When no key is configured, an unsigned annotated tag is created instead.

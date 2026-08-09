@@ -27,6 +27,18 @@ type Config struct {
 	// Email is the commit author/committer email. Same fallback chain
 	// as Name.
 	Email string
+	// Subject overrides the generated commit subject. When set, no LLM
+	// generation runs. Pairing rules with Message are documented in
+	// AGENTS.md and README.md.
+	Subject string
+	// Message overrides the generated commit body. When set, no LLM
+	// generation runs. Pairing rules with Subject are documented in
+	// AGENTS.md and README.md.
+	Message string
+	// Tag overrides the auto-bumped semver tag name. It is used verbatim
+	// only when it parses as a strict vMAJOR.MINOR.PATCH semver tag;
+	// otherwise the normal LatestSemverTag/NextSemverTag path runs.
+	Tag string
 }
 
 // FromEnv loads the configuration from the process environment.
@@ -37,6 +49,9 @@ func FromEnv() Config {
 		OllamaModel: os.Getenv("OLLAMA_DESC_MODEL"),
 		Name:        os.Getenv("OCOMMIT_NAME"),
 		Email:       os.Getenv("OCOMMIT_EMAIL"),
+		Subject:     os.Getenv("OCOMMIT_SUBJECT"),
+		Message:     os.Getenv("OCOMMIT_MESSAGE"),
+		Tag:         os.Getenv("OCOMMIT_TAG"),
 	}
 }
 

@@ -16,6 +16,13 @@
 //	                   reachable, the staged diff is turned into an LLM
 //	                   commit message (detailed body + TL;DR subject)
 //	OLLAMA_DESC_MODEL  Ollama model name; optional, defaults to llama3.2
+//	OCOMMIT_SUBJECT    override the commit subject; skips LLM generation.
+//	                   See AGENTS.md for the subject/message pairing rules.
+//	OCOMMIT_MESSAGE    override the commit body; skips LLM generation.
+//	                   See AGENTS.md for the subject/message pairing rules.
+//	OCOMMIT_TAG        override the tag name; used only when it parses as
+//	                   strict semver vMAJOR.MINOR.PATCH, otherwise the
+//	                   normal auto-bump path runs.
 //
 // ocommit runs inside a git repository and performs the equivalent of
 //
@@ -98,9 +105,15 @@ func run() int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// 4. Optional LLM commit message via local Ollama.
+	// 4. Resolve the commit message. Environment overrides
+	// (OCOMMIT_SUBJECT / OCOMMIT_MESSAGE) win over LLM generation: when
+	// either is set, no Ollama call is made. See AGENTS.md for the
+	// pairing rules.
 	msg := gitops.CommitMessage{Subject: "update"}
-	if cfg.OllamaURL != "" {
+	if override, ok := overrideMessage(cfg); ok {
+		msg = override
+		ui.Info("message override active (OCOMMIT_SUBJECT/OCOMMIT_MESSAGE)")
+	} else if cfg.OllamaURL != "" {
 		client := ollama.New(cfg.OllamaURL, cfg.OllamaModel)
 		if reachable := ollamaReachable(ui, ctx, client, cfg.OllamaURL); reachable {
 			var genErr error
@@ -189,19 +202,22 @@ func run() int {
 	}
 
 	var tagName string
-	if err := ui.Step("tag", "bumping semver patch", func() error {
-		latest, lerr := gitops.LatestSemverTag(repo)
-		if lerr != nil {
-			return lerr
+	if err := ui.Step("tag", tagStepLabel(cfg), func() error {
+		if cfg.Tag != "" && !gitops.ValidSemverTag(cfg.Tag) {
+			ui.Warn("OCOMMIT_TAG %q is not strict semver (vMAJOR.MINOR.PATCH); falling back to auto-bump", cfg.Tag)
 		}
-		tagName = gitops.NextSemverTag(latest)
+		name, terr := resolveTagName(repo, cfg)
+		if terr != nil {
+			return terr
+		}
+		tagName = name
 		if signer != nil {
-			_, terr := gitops.SignedTag(repo, hash, tagName, tagSubject, id, func(payload []byte) ([]byte, error) {
+			_, terr = gitops.SignedTag(repo, hash, tagName, tagSubject, id, func(payload []byte) ([]byte, error) {
 				return signer.Sign(payload)
 			})
 			return terr
 		}
-		_, terr := gitops.CreateTag(repo, hash, tagName, tagSubject, id)
+		_, terr = gitops.CreateTag(repo, hash, tagName, tagSubject, id)
 		return terr
 	}); err != nil {
 		ui.Warn("tag: failed to tag %s: %v", tagName, err)
@@ -210,6 +226,77 @@ func run() int {
 
 	ui.TagResult(tagName, hash.String()[:7], signer != nil)
 	return 0
+}
+
+// resolveTagName decides the tag name for the new commit. When OCOMMIT_TAG
+// is set and parses as strict semver it is normalized (a leading "v" is added
+// for bare "0.1.2") and used verbatim; otherwise the normal patch-bump path
+// runs. An invalid override is logged as a warning so the user knows the
+// override was ignored rather than silently dropped.
+func resolveTagName(repo *git.Repository, cfg config.Config) (string, error) {
+	if cfg.Tag != "" {
+		if gitops.ValidSemverTag(cfg.Tag) {
+			return gitops.NormalizeTag(cfg.Tag), nil
+		}
+		// Fall through to the auto-bump path; the warning is surfaced by
+		// the caller via the returned tag name mismatch, so just proceed.
+	}
+	latest, err := gitops.LatestSemverTag(repo)
+	if err != nil {
+		return "", err
+	}
+	return gitops.NextSemverTag(latest), nil
+}
+
+// tagStepLabel renders the label for the tag step based on the override.
+func tagStepLabel(cfg config.Config) string {
+	if cfg.Tag != "" && gitops.ValidSemverTag(cfg.Tag) {
+		return "tagging " + gitops.NormalizeTag(cfg.Tag)
+	}
+	return "bumping semver patch"
+}
+
+// overrideMessage resolves the commit message from the OCOMMIT_SUBJECT and
+// OCOMMIT_MESSAGE environment overrides. It returns the message and true
+// when an override is active (either variable set); false means the caller
+// should fall back to LLM generation / the default subject.
+//
+// Pairing rules:
+//   - both set:   subject = OCOMMIT_SUBJECT, body = OCOMMIT_MESSAGE.
+//   - subject only: subject = OCOMMIT_SUBJECT, body = OCOMMIT_SUBJECT
+//     (the subject stands in for the body).
+//   - message only: subject = first line of OCOMMIT_MESSAGE (shortened),
+//     body = full OCOMMIT_MESSAGE.
+func overrideMessage(cfg config.Config) (gitops.CommitMessage, bool) {
+	subject := strings.TrimSpace(cfg.Subject)
+	body := strings.TrimSpace(cfg.Message)
+	switch {
+	case subject == "" && body == "":
+		return gitops.CommitMessage{}, false
+	case body == "":
+		return gitops.CommitMessage{Subject: subject, Body: subject}, true
+	case subject == "":
+		return gitops.CommitMessage{Subject: shortenSubject(body), Body: body}, true
+	default:
+		return gitops.CommitMessage{Subject: subject, Body: body}, true
+	}
+}
+
+// shortenSubject returns a single-line subject derived from a multi-line
+// message body: the first non-empty line, trimmed and capped at 72 chars.
+// This mirrors the TL;DR contract the LLM path uses for the subject line.
+func shortenSubject(body string) string {
+	for line := range strings.SplitSeq(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			if len(line) > 72 {
+				line = line[:72]
+			}
+			return line
+		}
+	}
+	// All lines empty; fall back to the trimmed whole body.
+	return strings.TrimSpace(body)
 }
 
 // ollamaReachable probes Ollama while showing a spinner step. An unreachable

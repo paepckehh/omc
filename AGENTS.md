@@ -17,7 +17,8 @@ instance.
 
 - **No CLI flags.** All configuration comes from the environment:
   `OCOMMIT_KEY_PATH`, `OLLAMA_DESC_URL`, `OLLAMA_DESC_MODEL`,
-  `OCOMMIT_NAME`, `OCOMMIT_EMAIL`.
+  `OCOMMIT_NAME`, `OCOMMIT_EMAIL`, `OCOMMIT_SUBJECT`, `OCOMMIT_MESSAGE`,
+  `OCOMMIT_TAG`.
 - **No runtime dependency on external binaries.** No `git`, no `ssh-keygen`.
   Everything uses libraries: `github.com/go-git/go-git/v5` for repository
   operations, `github.com/hiddeco/sshsig` + `golang.org/x/crypto/ssh` for
@@ -31,11 +32,12 @@ instance.
 ## Where things live
 
 ```
-cmd/ocommit/main.go   pipeline: repo → stage → diff → (ollama) → (sign) → commit → log → tag
-internal/config/      config.FromEnv() reads the five env vars
+cmd/ocommit/main.go   pipeline: repo → stage → diff → (overrides|ollama) → (sign) → commit → log → tag
+internal/config/      config.FromEnv() reads the eight env vars
 internal/gitops/      PlainOpen detection, StageAll, StagedDiff, Commit,
                       SignedCommit, Log, ResolveIdentity, index→tree writer,
-                      LatestSemverTag, NextSemverTag, CreateTag, SignedTag
+                      LatestSemverTag, NextSemverTag, CreateTag, SignedTag,
+                      ValidSemverTag, NormalizeTag
 internal/sign/        sign.Load(keyPath), signer.Sign(payload) → armored SSH sig
 internal/ollama/      Client.Available(), DescribeDetail(), SummarizeTLDR()
 internal/output/      UI: stdout = results, stderr = diagnostics
@@ -43,19 +45,21 @@ internal/output/      UI: stdout = results, stderr = diagnostics
 
 ## Auto semver tagging
 
-After every successful commit, `ocommit` tags that commit with the next
-patch-bumped semver tag (`vX.Y.N+1`):
+After every successful commit, `ocommit` tags that commit with a semver tag:
 
-1. `gitops.LatestSemverTag(repo)` scans all `refs/tags/v*.*.*` refs and
+1. If `OCOMMIT_TAG` is set and parses as strict semver, that name (with a
+   leading `v` added for bare versions) is used verbatim. Otherwise the
+   auto-bump path runs.
+2. `gitops.LatestSemverTag(repo)` scans all `refs/tags/v*.*.*` refs and
    returns the highest semver version (pre-release suffixes ignored).
-2. `gitops.NextSemverTag(latest)` bumps the patch segment. An empty latest
+3. `gitops.NextSemverTag(latest)` bumps the patch segment. An empty latest
    (no prior tag) yields `v0.0.1`.
-3. `gitops.CreateTag` / `gitops.SignedTag` creates an **annotated** tag object
+4. `gitops.CreateTag` / `gitops.SignedTag` creates an **annotated** tag object
    on the new commit. The tag message is the commit's subject line. When a
    signer is available the tag is SSH-signed with the same key used for the
    commit — the armored `BEGIN SSH SIGNATURE` block is appended to the tag
    object content, byte-compatible with `git tag -s`.
-4. If the tag step fails (e.g. name collision), `ocommit` logs a warning and
+5. If the tag step fails (e.g. name collision), `ocommit` logs a warning and
    exits 0. The commit is never rolled back over a tag failure.
 
 ## Commit message format
@@ -74,6 +78,45 @@ The final message is:
   the payload signed is the commit without that header (git-conformant).
 - The body is optional: if the LLM returns only a subject, that is used.
 
+## Message & tag overrides (OCOMMIT_SUBJECT / OCOMMIT_MESSAGE / OCOMMIT_TAG)
+
+The subject, body, and tag can be supplied directly from the environment,
+which **wins over LLM generation**: when either `OCOMMIT_SUBJECT` or
+`OCOMMIT_MESSAGE` is set, the Ollama two-pass generation is skipped entirely
+and the override text lands verbatim in the commit object.
+
+### Subject / message pairing rules
+
+| `OCOMMIT_SUBJECT` | `OCOMMIT_MESSAGE` | Subject used       | Body used               |
+| ------------------ | ----------------- | ------------------ | ----------------------- |
+| set                | set               | `OCOMMIT_SUBJECT`  | `OCOMMIT_MESSAGE`       |
+| set                | unset             | `OCOMMIT_SUBJECT`  | `OCOMMIT_SUBJECT`       |
+| unset              | set               | first line of `OCOMMIT_MESSAGE` (shortened to ≤72 chars) | full `OCOMMIT_MESSAGE` |
+| unset              | unset             | LLM TL;DR or `update` | LLM detail (if any)  |
+
+Whitespace around the override values is trimmed. When only
+`OCOMMIT_MESSAGE` is set, its first non-empty line becomes the subject
+(mirroring the ≤72-char TL;DR contract of the LLM path); the full message
+is still used as the body.
+
+### Tag override
+
+`OCOMMIT_TAG` lets the caller name the tag explicitly instead of bumping the
+patch of the latest semver tag. The value is used **only** when it parses as
+strict semver `vMAJOR.MINOR.PATCH` (an optional leading `v`; three
+non-negative integer segments without leading zeros; no pre-release/build
+suffix). Arbitrarily large values in any of the three segments are accepted,
+so jumps like `v999.0.0` are valid.
+
+- A bare `1.2.3` is normalized to `v1.2.3`.
+- An invalid override (e.g. `v1.2`, `v1.2.3-rc.1`, `latest`, `v01.2.3`) is
+  **not** used: `ocommit` logs a warning and falls back to the normal
+  `LatestSemverTag` + `NextSemverTag` auto-bump path. The commit is never
+  rolled back over a bad tag override.
+
+`gitops.ValidSemverTag(name)` is the gate; `gitops.NormalizeTag(name)` adds
+the leading `v` for bare versions.
+
 ## Environment variables
 
 | Variable            | Meaning                                              | Behavior if set but broken                |
@@ -83,6 +126,9 @@ The final message is:
 | `OLLAMA_DESC_MODEL` | Ollama model name (optional, default `llama3.2`)     | Default used                              |
 | `OCOMMIT_NAME`      | Commit author/committer name (optional)              | Falls back to git config, then default    |
 | `OCOMMIT_EMAIL`     | Commit author/committer email (optional)             | Falls back to git config, then default    |
+| `OCOMMIT_SUBJECT`   | Override the commit subject (skips LLM generation)    | Trimmed; see pairing rules above          |
+| `OCOMMIT_MESSAGE`   | Override the commit body (skips LLM generation)       | Trimmed; see pairing rules above          |
+| `OCOMMIT_TAG`       | Override the tag name (strict semver only)           | Invalid → warn + auto-bump fallback       |
 
 ## Git identity
 

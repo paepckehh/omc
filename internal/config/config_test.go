@@ -86,3 +86,31 @@ func TestFromEnvKeyPathTildeExpanded(t *testing.T) {
 		t.Errorf("KeyPath %q should be absolute after expansion", c.KeyPath)
 	}
 }
+
+func TestFromEnvOverrides(t *testing.T) {
+	t.Setenv("OCOMMIT_SUBJECT", "feat: add overrides")
+	t.Setenv("OCOMMIT_MESSAGE", "detailed body\nspanning lines")
+	t.Setenv("OCOMMIT_TAG", "v1.2.3")
+
+	c := FromEnv()
+	if c.Subject != "feat: add overrides" {
+		t.Errorf("Subject = %q, want feat: add overrides", c.Subject)
+	}
+	if c.Message != "detailed body\nspanning lines" {
+		t.Errorf("Message = %q, want the detailed body", c.Message)
+	}
+	if c.Tag != "v1.2.3" {
+		t.Errorf("Tag = %q, want v1.2.3", c.Tag)
+	}
+}
+
+func TestFromEnvOverridesEmpty(t *testing.T) {
+	t.Setenv("OCOMMIT_SUBJECT", "")
+	t.Setenv("OCOMMIT_MESSAGE", "")
+	t.Setenv("OCOMMIT_TAG", "")
+
+	c := FromEnv()
+	if c.Subject != "" || c.Message != "" || c.Tag != "" {
+		t.Errorf("expected empty overrides, got %+v", c)
+	}
+}

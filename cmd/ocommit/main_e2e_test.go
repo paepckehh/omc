@@ -166,6 +166,281 @@ func TestMainEndToEndMissingKey(t *testing.T) {
 	}
 }
 
+// TestMainEndToEndOverrides verifies that OCOMMIT_SUBJECT, OCOMMIT_MESSAGE
+// and a valid OCOMMIT_TAG override the generated message and tag, and that
+// no Ollama call is attempted (the override message lands verbatim).
+func TestMainEndToEndOverrides(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping binary e2e in short mode")
+	}
+	bin := filepath.Join(t.TempDir(), "ocommit")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+
+	dir := t.TempDir()
+	repoDir := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	init := exec.Command("git", "init", "-q")
+	init.Dir = repoDir
+	if out, err := init.CombinedOutput(); err != nil {
+		t.Skipf("git unavailable: %v\n%s", err, out)
+	}
+	cfg := exec.Command("git", "config", "user.name", "E2E User")
+	cfg.Dir = repoDir
+	_ = cfg.Run()
+	cfg = exec.Command("git", "config", "user.email", "e2e@example.com")
+	cfg.Dir = repoDir
+	_ = cfg.Run()
+
+	if err := os.WriteFile(filepath.Join(repoDir, "hello.txt"), []byte("override e2e\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin)
+	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(),
+		"OCOMMIT_SUBJECT=feat: override subject",
+		"OCOMMIT_MESSAGE=multi\nline\nbody",
+		"OCOMMIT_TAG=v3.2.1",
+		"OCOMMIT_NAME=E2E User",
+		"OCOMMIT_EMAIL=e2e@example.com",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("ocommit failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "override subject") {
+		t.Errorf("output missing override subject: %s", out)
+	}
+	if !strings.Contains(string(out), "v3.2.1") {
+		t.Errorf("output missing override tag: %s", out)
+	}
+
+	// The override tag must be the only tag created.
+	tag := exec.Command("git", "tag", "-l", "v*")
+	tag.Dir = repoDir
+	tagOut, err := tag.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git tag -l failed: %v\n%s", err, tagOut)
+	}
+	tags := strings.Fields(strings.TrimSpace(string(tagOut)))
+	if len(tags) != 1 || tags[0] != "v3.2.1" {
+		t.Errorf("tags = %v, want [v3.2.1]", tags)
+	}
+
+	// The commit subject must be the override subject.
+	show := exec.Command("git", "show", "-s", "--format=%s", "HEAD")
+	show.Dir = repoDir
+	if subj, err := show.CombinedOutput(); err != nil {
+		t.Fatalf("git show: %v", err)
+	} else if got := strings.TrimSpace(string(subj)); got != "feat: override subject" {
+		t.Errorf("subject = %q, want feat: override subject", got)
+	}
+
+	// The body must be the override message.
+	body := exec.Command("git", "show", "-s", "--format=%b", "HEAD")
+	body.Dir = repoDir
+	if b, err := body.CombinedOutput(); err != nil {
+		t.Fatalf("git show body: %v", err)
+	} else if got := strings.TrimSpace(string(b)); got != "multi\nline\nbody" {
+		t.Errorf("body = %q, want multi\\nline\\nbody", got)
+	}
+}
+
+// TestMainEndToEndSubjectOnly verifies that OCOMMIT_SUBJECT alone is used for
+// both subject and body.
+func TestMainEndToEndSubjectOnly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping binary e2e in short mode")
+	}
+	bin := filepath.Join(t.TempDir(), "ocommit")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+
+	dir := t.TempDir()
+	repoDir := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	init := exec.Command("git", "init", "-q")
+	init.Dir = repoDir
+	if out, err := init.CombinedOutput(); err != nil {
+		t.Skipf("git unavailable: %v\n%s", err, out)
+	}
+	cfg := exec.Command("git", "config", "user.name", "E2E User")
+	cfg.Dir = repoDir
+	_ = cfg.Run()
+	cfg = exec.Command("git", "config", "user.email", "e2e@example.com")
+	cfg.Dir = repoDir
+	_ = cfg.Run()
+
+	if err := os.WriteFile(filepath.Join(repoDir, "hello.txt"), []byte("subject only\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin)
+	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(),
+		"OCOMMIT_SUBJECT=solo subject",
+		"GIT_AUTHOR_NAME=E2E User",
+		"GIT_AUTHOR_EMAIL=e2e@example.com",
+		"GIT_COMMITTER_NAME=E2E User",
+		"GIT_COMMITTER_EMAIL=e2e@example.com",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("ocommit failed: %v\n%s", err, out)
+	}
+
+	show := exec.Command("git", "show", "-s", "--format=%s", "HEAD")
+	show.Dir = repoDir
+	if subj, err := show.CombinedOutput(); err != nil {
+		t.Fatalf("git show: %v", err)
+	} else if got := strings.TrimSpace(string(subj)); got != "solo subject" {
+		t.Errorf("subject = %q, want solo subject", got)
+	}
+
+	// Body must equal the subject when only OCOMMIT_SUBJECT is set.
+	body := exec.Command("git", "show", "-s", "--format=%b", "HEAD")
+	body.Dir = repoDir
+	if b, err := body.CombinedOutput(); err != nil {
+		t.Fatalf("git show body: %v", err)
+	} else if got := strings.TrimSpace(string(b)); got != "solo subject" {
+		t.Errorf("body = %q, want solo subject (same as subject)", got)
+	}
+}
+
+// TestMainEndToEndMessageOnly verifies that OCOMMIT_MESSAGE alone is used as
+// the body, with its first line shortened into the subject.
+func TestMainEndToEndMessageOnly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping binary e2e in short mode")
+	}
+	bin := filepath.Join(t.TempDir(), "ocommit")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+
+	dir := t.TempDir()
+	repoDir := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	init := exec.Command("git", "init", "-q")
+	init.Dir = repoDir
+	if out, err := init.CombinedOutput(); err != nil {
+		t.Skipf("git unavailable: %v\n%s", err, out)
+	}
+	cfg := exec.Command("git", "config", "user.name", "E2E User")
+	cfg.Dir = repoDir
+	_ = cfg.Run()
+	cfg = exec.Command("git", "config", "user.email", "e2e@example.com")
+	cfg.Dir = repoDir
+	_ = cfg.Run()
+
+	if err := os.WriteFile(filepath.Join(repoDir, "hello.txt"), []byte("message only\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin)
+	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(),
+		"OCOMMIT_MESSAGE=first line of body\nsecond line of body",
+		"GIT_AUTHOR_NAME=E2E User",
+		"GIT_AUTHOR_EMAIL=e2e@example.com",
+		"GIT_COMMITTER_NAME=E2E User",
+		"GIT_COMMITTER_EMAIL=e2e@example.com",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("ocommit failed: %v\n%s", err, out)
+	}
+
+	show := exec.Command("git", "show", "-s", "--format=%s", "HEAD")
+	show.Dir = repoDir
+	if subj, err := show.CombinedOutput(); err != nil {
+		t.Fatalf("git show: %v", err)
+	} else if got := strings.TrimSpace(string(subj)); got != "first line of body" {
+		t.Errorf("subject = %q, want first line of body", got)
+	}
+
+	body := exec.Command("git", "show", "-s", "--format=%b", "HEAD")
+	body.Dir = repoDir
+	if b, err := body.CombinedOutput(); err != nil {
+		t.Fatalf("git show body: %v", err)
+	} else if got := strings.TrimSpace(string(b)); got != "first line of body\nsecond line of body" {
+		t.Errorf("body = %q, want the full message", got)
+	}
+}
+
+// TestMainEndToEndInvalidTagOverride verifies that an OCOMMIT_TAG that does
+// not parse as strict semver is ignored and the normal auto-bump path runs
+// (v0.0.1 on a fresh repo).
+func TestMainEndToEndInvalidTagOverride(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping binary e2e in short mode")
+	}
+	bin := filepath.Join(t.TempDir(), "ocommit")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+
+	dir := t.TempDir()
+	repoDir := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	init := exec.Command("git", "init", "-q")
+	init.Dir = repoDir
+	if out, err := init.CombinedOutput(); err != nil {
+		t.Skipf("git unavailable: %v\n%s", err, out)
+	}
+	cfg := exec.Command("git", "config", "user.name", "E2E User")
+	cfg.Dir = repoDir
+	_ = cfg.Run()
+	cfg = exec.Command("git", "config", "user.email", "e2e@example.com")
+	cfg.Dir = repoDir
+	_ = cfg.Run()
+
+	if err := os.WriteFile(filepath.Join(repoDir, "hello.txt"), []byte("bad tag\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin)
+	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(),
+		"OCOMMIT_TAG=not-semver",
+		"GIT_AUTHOR_NAME=E2E User",
+		"GIT_AUTHOR_EMAIL=e2e@example.com",
+		"GIT_COMMITTER_NAME=E2E User",
+		"GIT_COMMITTER_EMAIL=e2e@example.com",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("ocommit failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "warning") {
+		t.Errorf("output missing invalid-tag warning: %s", out)
+	}
+
+	tag := exec.Command("git", "tag", "-l", "v*")
+	tag.Dir = repoDir
+	tagOut, err := tag.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git tag -l failed: %v\n%s", err, tagOut)
+	}
+	tags := strings.Fields(strings.TrimSpace(string(tagOut)))
+	if len(tags) != 1 || tags[0] != "v0.0.1" {
+		t.Errorf("tags = %v, want [v0.0.1] (auto-bump after invalid override)", tags)
+	}
+}
+
 // TestMainEndToEndCleanTree verifies that when there is nothing to commit,
 // ocommit informs the user and exits 0 without creating a commit.
 func TestMainEndToEndCleanTree(t *testing.T) {
