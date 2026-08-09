@@ -2,17 +2,16 @@
 
 **One command. No flags. Signed, AI-described commits your team can actually trust.**
 
-`ocommit` is a plain, stupid-simple git commit utility written in pure Go. It
-takes **zero command line arguments** — every behavior is an environment
+`ocommit` is a plain, stupid-simple single binary, dependency free git auto commit utility
+written in pure Go. It takes **zero command line arguments** — every behavior is an environment
 variable — and inside any git working tree it does the equivalent of:
 
 ```console
-git add -A && git commit -asm update && git log
+git add -A && git commit -asm <detailed llm generated commit message content> && git log
 ```
 
-Except the commit message isn't `update`. When a local [Ollama] instance is
-running, `ocommit` reads the staged diff, writes a detailed commit body, and
-boils it down to a crisp TL;DR subject. And when you hand it an SSH key, the
+When a local [Ollama] instance is running, `ocommit` reads the staged diff, writes a detailed
+commit body, and boils it down to a crisp TL;DR subject. And when you hand it an SSH key, the
 commit comes out cryptographically signed — in real git SSH format that
 `git log --show-signature` and `git verify-commit` accept.
 
@@ -42,12 +41,12 @@ exactly that — details under [Secure agentic workflows](#secure-agentic-workfl
 
 ```console
 $ export OLLAMA_DESC_URL=http://127.0.0.1:11434
-$ export OCOMMIT_KEY_PATH=~/.ssh/keys/agent-commit
+$ export OCOMMIT_KEY_PATH=~/.ssh/agent
 $ ocommit
 ocommit: staging all changes
 ocommit: reading staged diff
 ocommit: ollama reachable at http://127.0.0.1:11434, generating commit message
-ocommit: signing commit with ssh key /home/me/.ssh/keys/agent-commit
+ocommit: signing commit with ssh key /home/me/.ssh/agent
 ocommit: committing (as Ada Lovelace <ada@example.com>, signed)
 ocommit: committed 9d3f2ab
 9d3f2ab  Ada Lovelace <ada@example.com>  2026-08-08
@@ -65,10 +64,16 @@ Everything that matters came from the environment.
 - **Optional**: a running [Ollama] server for AI-generated commit messages.
 - **Optional**: an SSH private key to sign commits.
 
+## Run
+
+```console
+go run paepcke.de/ocommit/cmd/ocommit@latest
+```
+
 ## Install
 
 ```console
-go install paepcke.de/ocommit@latest
+go install paepcke.de/ocommit/cmd/ocommit@latest
 ```
 
 Or build from source:
@@ -76,7 +81,7 @@ Or build from source:
 ```console
 git clone https://github.com/your-org/ocommit
 cd ocommit
-make build              # produces ./ocommit
+make build      
 sudo install -m0755 ocommit /usr/local/bin/
 ```
 
@@ -127,7 +132,7 @@ giving it the power to *publish*.
 Your agent's shell gets only a **signing** key:
 
 ```console
-export OCOMMIT_KEY_PATH=~/.ssh/keys/host-key   # can SIGN commits, cannot push
+export OCOMMIT_KEY_PATH=~/.ssh/agent           # can SIGN commits, cannot push
 export OLLAMA_DESC_URL=http://127.0.0.1:11434  # lets it describe its own work
 ocommit
 ```
@@ -202,7 +207,7 @@ ocommit
 | `OCOMMIT_EMAIL` | Commit author/committer email (optional). Falls back to git config, then `git@ocommit.local`. |
 
 > **Signing:** only passphrase-less keys are supported (there is no interactive
-> prompt, by design). `ssh-keygen -t ed25519 -N "" -f ~/.ssh/keys/agent-commit`
+> prompt, by design). `ssh-keygen -t ed25519 -N "" -C agent@paepcke.de -f ~/.ssh/agent`
 > is your friend. Scheduling note for CI: protect that key with filesystem
 > permissions and rotate it like any credential.
 
@@ -226,7 +231,7 @@ network.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ ocommit (pure Go, no git binary, no CLI args)                 │
+│ ocommit (pure Go, no git binary, no CLI args)                │
 │                                                              │
 │  1. find enclosing repo  (go-git PlainOpen, walk up)         │
 │  2. stage all            (Worktree.AddWithOptions All)       │

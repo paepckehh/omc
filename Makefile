@@ -19,9 +19,9 @@ deploy-test-nix: update build
 	sudo mv -f ./$(PROJECT) $(TARGETBIN)
 
 run: build 
-	OLLAMA_DESC_URL="http://aiworker02.dbt.corp:11434/v1" \
+	OLLAMA_DESC_URL="http://aiworker02.dbt.corp:11434" \
 	OLLAMA_DESC_MODEL="gpt-oss:latest" \
-	OCOMMIT_KEY_PATH="..." \
+	OCOMMIT_KEY_PATH="~/.ssh/agent" \
 	OCOMMIT_NAME="PAECPKE, Michael" \
 	OCOMMIT_EMAIL="git@paepcke.de" \
 	./$(PROJECT)
@@ -36,6 +36,3 @@ check:
 	gofmt -l .
 	go vet ./...
 	go mod tidy -diff
-
-test:
-	go test -race -count=1 ./...
