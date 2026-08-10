@@ -7,12 +7,14 @@
 `omc` (spoken: *"oh-my-commit"*) is a plain, stupid-simple git auto commit 
 sign tag push utility, with agent/human role seperation for signed commits
 including llm generated commit message and final review/push for humans.
-utility written in pure Go. It takes **zero command line arguments** — every
-behavior is an environment variable — and inside any git working tree it does
-the equivalent of:
+utility written in pure Go. It takes **zero command line arguments**, 
+zero runtime dependencies: not even legacy git installed every behavior
+is an environment variable — and inside any git working tree 
+
+one 3 letter command does the equivalent of:
 
 ```console
-git add -A && git commit -asm <detailed llm generated commit message content> && git tag <old_semver+1>
+git add -A && git commit -Sm <detailed llm generated commit message> && git tag -s <old_semver+1> && [opt: git push --tags]
 ```
 
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev)
@@ -92,7 +94,7 @@ Set `OMC_SUBJECT` / `OMC_MESSAGE` to bypass the LLM and write the commit text yo
 <td width="50%" valign="top">
 
 ### 🔁 Idempotent & predictable
-No flags to remember, no prompts to answer. Run it twice, get two commits and two bumped tags (`v0.0.1`, then `v0.0.2`). Tags never collide; the patch always advances.
+No flags to remember, no prompts to answer. No Tags that collide. Just configure (when needed env) then 3 letter Autopilot everywhere.
 
 </td>
 <td width="50%" valign="top">
