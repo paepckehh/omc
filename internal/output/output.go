@@ -585,6 +585,24 @@ func (u *UI) SecurityKeyModeNotice(keyPath, algorithm string) {
 	u.emit(u.Err, "INFO", "sign", "signing commit with ssh-agent security key", F("key", keyPath), F("mode", "smartcard"), F("algo", algorithm))
 }
 
+// SecurityKeyTouchNotice renders a prominent notice to stderr that a FIDO2
+// security-key (smartcard/yubikey) operation is about to start and the user
+// may need to touch the device to authorise it. The ssh-agent forwards each
+// signature or authentication challenge to the authenticator, which blinks
+// and waits for a touch (and possibly a PIN) before it produces the
+// signature; without the touch the operation hangs until the agent times
+// out. Emit this right before every smartcard-bound step (commit signing,
+// tag signing, push) so the user knows to keep the device within reach.
+// action describes the upcoming operation, e.g. "the commit signing".
+func (u *UI) SecurityKeyTouchNotice(keyPath, action string) {
+	u.emit(u.Err, "INFO", "touch",
+		"security key detected: touch your smartcard/yubikey when it blinks to authorise "+action,
+		F("key", keyPath),
+		F("mode", "smartcard"),
+		F("action", action),
+	)
+}
+
 // PushResult renders the post-push notice to stdout: the remote that was
 // pushed to, the pushed branch (empty on detached HEAD), and whether the
 // tag pass ran. The fields are emitted as separate key=value tokens so

@@ -228,6 +228,14 @@ PKCS#11, no `ssh-agent` binary, no CGO:
   algorithm. Armored signatures stay byte-compatible with `git commit -S` /
   `git tag -s` (git accepts them; `git log --show-signature` /
   `git verify-commit` work).
+- **Touch notice** — every smartcard-bound step (commit signing, tag
+  signing, and the SSH push when `OMC_PUSH_KEY_PATH` names a security-key
+  handle) is preceded by a prominent `touch` notice on stderr via
+  `output.UI.SecurityKeyTouchNotice`, telling the user to touch their
+  smartcard/yubikey when it blinks to authorise the operation. Each
+  signature/auth challenge forwarded by the ssh-agent to the authenticator
+  is a fresh user-presence check, so the notice is emitted once per step
+  that needs a touch (commit and tag are separate touches).
 - **Limitations** — resident/discoverable or verify-required (-O
   verify-required) keys cannot be *enforced* by omc; they behave like
   ordinary sk keys, with whatever user verification the device and agent

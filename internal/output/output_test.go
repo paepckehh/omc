@@ -233,6 +233,33 @@ func TestSigningNoticeNonTTY(t *testing.T) {
 	})
 }
 
+func TestSecurityKeyTouchNoticeNonTTY(t *testing.T) {
+	ui, _, err := newTestUI()
+	ui.SecurityKeyTouchNotice("/home/me/.ssh/id_ed25519_sk", "the commit signing")
+	got := err.String()
+	if !strings.Contains(got, "INFO") {
+		t.Errorf("missing INFO level, got: %q", got)
+	}
+	if !strings.Contains(got, "touch") {
+		t.Errorf("missing touch step, got: %q", got)
+	}
+	if !strings.Contains(got, "smartcard/yubikey") {
+		t.Errorf("missing smartcard/yubikey prompt, got: %q", got)
+	}
+	if !strings.Contains(got, "the commit signing") {
+		t.Errorf("missing action description, got: %q", got)
+	}
+	if !strings.Contains(got, "key=/home/me/.ssh/id_ed25519_sk") {
+		t.Errorf("missing structured key= field, got: %q", got)
+	}
+	if !strings.Contains(got, "mode=smartcard") {
+		t.Errorf("missing structured mode= field, got: %q", got)
+	}
+	if !strings.Contains(got, "action=the commit signing") {
+		t.Errorf("missing structured action= field, got: %q", got)
+	}
+}
+
 func TestErrorNonTTY(t *testing.T) {
 	ui, _, err := newTestUI()
 	ui.Error(errors.New("not a git repository"))

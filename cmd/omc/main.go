@@ -162,6 +162,7 @@ func run() int {
 	// the final mode so the record is unambiguous.
 	if skMode && signer != nil {
 		ui.SecurityKeyModeNotice(cfg.KeyPath, signer.PublicAlgorithm())
+		ui.SecurityKeyTouchNotice(cfg.KeyPath, "the commit signing")
 	} else {
 		ui.SigningNotice(cfg.KeyPath, signer != nil)
 	}
@@ -199,6 +200,9 @@ func run() int {
 	}
 
 	var tagName string
+	if signer != nil && skMode {
+		ui.SecurityKeyTouchNotice(cfg.KeyPath, "the tag signing")
+	}
 	if err := ui.Step("tag", tagStepLabel(cfg), func() error {
 		name, skipped, terr := resolveTagName(repo, cfg)
 		if skipped {
@@ -229,6 +233,9 @@ func run() int {
 	// degrade: the commit and tag are never rolled back over a push
 	// problem, matching the "always degrade, never block" contract.
 	if cfg.PushKeyPath != "" {
+		if sign.IsSecurityKeyPath(cfg.PushKeyPath) {
+			ui.SecurityKeyTouchNotice(cfg.PushKeyPath, "the push")
+		}
 		if err := ui.Step("push", "pushing commit and tags to remote", func() error {
 			_, err := gitops.PushToRemote(repo, cfg.PushKeyPath)
 			return err
@@ -296,6 +303,9 @@ func oneLine(s string) string {
 func pushNothing(ui *output.UI, repo *git.Repository, cfg config.Config) {
 	if cfg.PushKeyPath == "" {
 		return
+	}
+	if sign.IsSecurityKeyPath(cfg.PushKeyPath) {
+		ui.SecurityKeyTouchNotice(cfg.PushKeyPath, "the push")
 	}
 	res, err := gitops.PushToRemote(repo, cfg.PushKeyPath)
 	if err != nil {
@@ -454,7 +464,7 @@ func loadSigner(ui *output.UI, cfg config.Config) (*sign.Signer, bool) {
 	// adjacent .pub file) and route straight to the ssh-agent.
 	if sign.DetectKind(cfg.KeyPath) == sign.KindSecurityKey {
 		if s, err := sign.SecurityKeySigner(cfg.KeyPath); err == nil {
-			ui.Warn("ssh key %s is a smartcard security key; signing via the ssh-agent (touch the device when prompted)", cfg.KeyPath)
+			ui.Warn("ssh key %s is a smartcard security key; signing via the ssh-agent", cfg.KeyPath)
 			return s, true
 		} else {
 			ui.Warn("ssh key %s is a smartcard security key, but no ssh-agent identity matches (%v); committing unsigned", cfg.KeyPath, err)
@@ -475,7 +485,7 @@ func loadSigner(ui *output.UI, cfg config.Config) (*sign.Signer, bool) {
 
 	if errors.Is(stepErr, sign.ErrSecurityKeyOnly) {
 		if s, err := sign.SecurityKeySigner(cfg.KeyPath); err == nil {
-			ui.Warn("ssh key %s is a smartcard security key; signing via the ssh-agent (touch the device when prompted)", cfg.KeyPath)
+			ui.Warn("ssh key %s is a smartcard security key; signing via the ssh-agent", cfg.KeyPath)
 			return s, true
 		} else {
 			ui.Warn("ssh key %s is a smartcard security key, but no ssh-agent identity matches (%v); committing unsigned", cfg.KeyPath, err)
