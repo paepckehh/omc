@@ -8,6 +8,7 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	"github.com/go-git/go-git/v5/plumbing/transport/server"
@@ -164,4 +165,100 @@ func assertRemoteRef(t *testing.T, s storer.ReferenceStorer, name plumbing.Refer
 	if got.Hash() != want {
 		t.Errorf("remote %s = %s, want %s", name, got.Hash(), want)
 	}
+}
+
+// TestPushToRemoteBackslashEntry is a regression guard for a go-git
+// enumeration-time path check. go-git v5.19.1 added pathutil.ValidTreePath to
+// TreeWalker.Next; since Remote.Push walks every reachable tree via
+// revlist.Objects to build the packfile, a single tree entry whose name that
+// check rejects (here: a lone backslash, which git itself stores fine) aborts
+// the whole push with "invalid path". omc pins go-git to v5.19.0 (the last
+// release before that check) so the enumeration walks object names verbatim.
+// This test builds such a repo by writing raw objects (the worktree Add path
+// also rejects the name, so the tree is assembled directly in the store) and
+// asserts the push still succeeds. If go-git is ever upgraded past v5.19.0
+// and the regression returns, this test fails loudly.
+func TestPushToRemoteBackslashEntry(t *testing.T) {
+	bare := newRemoteBare(t, "omcbs")
+
+	repo, _, _ := initTestRepo(t)
+	if _, err := repo.CreateRemote(&config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{"omcbs://omc/repos/remote.git"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	commit := writeBackslashCommit(t, repo)
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(
+		plumbing.NewBranchReferenceName("master"), commit,
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Storer.SetReference(plumbing.NewSymbolicReference(
+		plumbing.HEAD, plumbing.NewBranchReferenceName("master"),
+	)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := PushToRemote(repo, ""); err != nil {
+		t.Fatalf("PushToRemote with backslash-named tree entry failed: %v\n"+
+			"go-git's revlist must enumerate object names verbatim; this fails "+
+			"when go-git is upgraded past v5.19.0 (see go.mod pin comment).", err)
+	}
+	assertRemoteRef(t, bare.Storer, plumbing.NewBranchReferenceName("master"), commit)
+}
+
+// writeBackslashCommit stores a blob plus a tree that names the blob "\" (a
+// single backslash), then a commit pointing at that tree. The objects are
+// written straight into the storer to bypass the worktree path validator,
+// which would otherwise refuse the name before it ever reaches the store.
+// The returned hash is the commit's hash.
+func writeBackslashCommit(t *testing.T, repo *git.Repository) plumbing.Hash {
+	t.Helper()
+
+	blob := &plumbing.MemoryObject{}
+	blob.SetType(plumbing.BlobObject)
+	bw, err := blob.Writer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bw.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	blobHash, err := repo.Storer.SetEncodedObject(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	treeObj := &plumbing.MemoryObject{}
+	tree := &object.Tree{Entries: []object.TreeEntry{{
+		Name: "\\",
+		Mode: 0o100644,
+		Hash: blobHash,
+	}}}
+	if err := tree.Encode(treeObj); err != nil {
+		t.Fatal(err)
+	}
+	treeHash, err := repo.Storer.SetEncodedObject(treeObj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	commitObj := &plumbing.MemoryObject{}
+	sig := object.Signature{Name: "T", Email: "t@t"}
+	commit := &object.Commit{
+		Author:    sig,
+		Committer: sig,
+		Message:   "backslash entry",
+		TreeHash:  treeHash,
+	}
+	if err := commit.Encode(commitObj); err != nil {
+		t.Fatal(err)
+	}
+	commitHash, err := repo.Storer.SetEncodedObject(commitObj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return commitHash
 }

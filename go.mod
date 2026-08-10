@@ -5,7 +5,16 @@ go 1.26.5
 require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/term v0.2.2
-	github.com/go-git/go-git/v5 v5.19.2
+	// Pinned to v5.19.0: v5.19.1 added a pathutil.ValidTreePath check inside
+	// TreeWalker.Next, which makes revlist.Objects (used by Remote.Push)
+	// abort with "invalid path" on any repo whose history contains a tree
+	// entry with a name git itself accepts but the new check rejects (e.g. a
+	// lone backslash). The check is a worktree-materialization guard that
+	// belongs at checkout time, not during packfile object enumeration; omc
+	// never materializes untrusted trees, so the v5.19.0 checkout-time
+	// validPath guard is sufficient here. Bump only once go-git moves the
+	// validation out of the enumeration path.
+	github.com/go-git/go-git/v5 v5.19.0
 	github.com/hiddeco/sshsig v0.2.0
 	github.com/lucasb-eyer/go-colorful v1.4.1
 	golang.org/x/crypto v0.54.0
