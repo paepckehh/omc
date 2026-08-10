@@ -4,13 +4,15 @@
 
 **oh-my-commit — one command, no flags. Signed, AI-described commits your team can actually trust.**
 
-`omc` (spoken: *"oh-my-commit"*) is a plain, stupid-simple git auto-commit
+`omc` (spoken: *"oh-my-commit"*) is a plain, stupid-simple git auto commit 
+sign tag push utility, with agent/human role seperation for signed commits
+including llm generated commit message and final review/push for humans.
 utility written in pure Go. It takes **zero command line arguments** — every
 behavior is an environment variable — and inside any git working tree it does
 the equivalent of:
 
 ```console
-git add -A && git commit -asm <detailed llm generated commit message content>
+git add -A && git commit -asm <detailed llm generated commit message content> && git tag <old_semver+1>
 ```
 
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev)
