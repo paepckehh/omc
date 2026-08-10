@@ -786,10 +786,18 @@ func pushOnce(repo *git.Repository, cfg *config.RemoteConfig, opts *git.PushOpti
 // transport.AuthMethod, which makes go-git fall back to its default auth
 // (SSH agent for ssh URLs, no auth for https/file URLs).
 //
-// HostKeyCallback is deliberately left nil so go-git verifies the server
-// host key against ~/.ssh/known_hosts (and SSH_KNOWN_HOSTS), exactly like
-// git. A host that is not in known_hosts makes the push fail with a warning
-// rather than silently trusting an unknown server.
+// The server host key is verified against ~/.ssh/known_hosts and
+// /etc/ssh/ssh_known_hosts (plus SSH_KNOWN_HOSTS), exactly like git. On top
+// of wiring that host-key callback, applyKnownHosts also restricts the
+// offered host-key algorithms to the ones actually stored in known_hosts for
+// the target host. Without that restriction x/crypto/ssh falls back to its
+// full default algorithm list, where ecdsa is preferred over ed25519, so a
+// server like github.com ends up presenting an ecdsa key that the
+// known_hosts file does not store and the handshake fails with
+// "knownhosts: key mismatch" even though "git push" (OpenSSH derives the
+// algorithm list from known_hosts itself) succeeds. A host that is not in
+// known_hosts at all still fails with a warning rather than silently
+// trusting an unknown server.
 func getSSHAuth(keyPath string, remoteURLs []string) (transport.AuthMethod, error) {
 	last := remoteURLs[len(remoteURLs)-1]
 	ep, err := transport.NewEndpoint(last)
@@ -808,15 +816,17 @@ func getSSHAuth(keyPath string, remoteURLs []string) (transport.AuthMethod, erro
 		}
 	}
 
-	if keyPath == "" {
-		auth, err := sshpkg.NewSSHAgentAuth(user)
+	hostWithPort := sshHostWithPort(ep)
+
+	var auth transport.AuthMethod
+	switch {
+	case keyPath == "":
+		a, err := sshpkg.NewSSHAgentAuth(user)
 		if err != nil {
 			return nil, fmt.Errorf("ssh agent auth: %w", err)
 		}
-		return auth, nil
-	}
-
-	if sign.IsSecurityKeyPath(keyPath) {
+		auth = a
+	case sign.IsSecurityKeyPath(keyPath):
 		// The path names a FIDO2 security-key key (e.g.
 		// ~/.ssh/id_ed25519_sk). The private key material lives on the
 		// smartcard and can only be used through the ssh-agent, exactly
@@ -824,14 +834,78 @@ func getSSHAuth(keyPath string, remoteURLs []string) (transport.AuthMethod, erro
 		// disk is just a handle to the agent-held key, so the key path
 		// selects which agent identity to offer and the signature is
 		// delegated to the agent.
-		return securityKeyAuth(user, keyPath)
+		a, err := securityKeyAuth(user, keyPath)
+		if err != nil {
+			return nil, err
+		}
+		auth = a
+	default:
+		a, err := sshpkg.NewPublicKeysFromFile(user, keyPath, "")
+		if err != nil {
+			return nil, fmt.Errorf("load push key %s: %w", keyPath, err)
+		}
+		auth = a
 	}
 
-	auth, err := sshpkg.NewPublicKeysFromFile(user, keyPath, "")
-	if err != nil {
-		return nil, fmt.Errorf("load push key %s: %w", keyPath, err)
+	if err := applyKnownHosts(auth, hostWithPort); err != nil {
+		// A broken known_hosts setup degrades like every other push
+		// problem: warn via the returned error path but keep the auth
+		// method so the caller can still attempt the push.
+		return auth, err
 	}
 	return auth, nil
+}
+
+// sshHostWithPort builds the "host:port" string used to look up a server in
+// the known_hosts files, mirroring go-git's own getHostWithPort. The default
+// SSH port is 22 when the URL did not specify one, matching how known_hosts
+// entries without an explicit port match port 22.
+func sshHostWithPort(ep *transport.Endpoint) string {
+	port := ep.Port
+	if port <= 0 {
+		port = 22
+	}
+	return net.JoinHostPort(ep.Host, strconv.Itoa(port))
+}
+
+// applyKnownHosts wires the known_hosts host-key callback and the matching
+// host-key algorithm list into a go-git SSH auth method. It must be called
+// for every SSH auth method, because go-git only populates HostKeyAlgorithms
+// from known_hosts when the auth method leaves HostKeyCallback nil AND its
+// ClientConfig() helper has not already filled that callback, which is the
+// case for all auth methods here. Setting both fields ourselves also makes
+// connect()'s own known_hosts detection a no-op (it only runs when
+// HostKeyCallback is still nil), so the algorithm restriction always applies.
+//
+// When the host is not present in known_hosts the algorithm list is empty;
+// HostKeyAlgorithms is then left unset so x/crypto/ssh uses its defaults and
+// the known_hosts callback itself surfaces the usual "key is unknown"
+// failure, preserving the "never trust an unknown server" contract.
+func applyKnownHosts(auth transport.AuthMethod, hostWithPort string) error {
+	db, err := sshpkg.NewKnownHostsDb()
+	if err != nil {
+		return fmt.Errorf("load known_hosts: %w", err)
+	}
+	cb := db.HostKeyCallback()
+	algos := db.HostKeyAlgorithms(hostWithPort)
+
+	// Both *PublicKeys and *PublicKeysCallback embed HostKeyCallbackHelper,
+	// which exposes the exported HostKeyCallback and HostKeyAlgorithms
+	// fields. A type switch keeps this forward-compatible if go-git adds
+	// more SSH auth method types later.
+	switch a := auth.(type) {
+	case *sshpkg.PublicKeys:
+		a.HostKeyCallback = cb
+		if len(algos) > 0 {
+			a.HostKeyAlgorithms = algos
+		}
+	case *sshpkg.PublicKeysCallback:
+		a.HostKeyCallback = cb
+		if len(algos) > 0 {
+			a.HostKeyAlgorithms = algos
+		}
+	}
+	return nil
 }
 
 // --- FIDO2 security-key support -------------------------------------------------
