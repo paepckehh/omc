@@ -301,12 +301,12 @@ func ollamaReachable(ui *output.UI, ctx context.Context, client *ollama.Client, 
 }
 
 // generateMessageProgress performs the two-step LLM conversation (detailed
-// description, then TL;DR summary) while showing a progress bar that advances
-// 0% -> 50% -> 100%. files is the list of changed paths, used as a compact
-// summary so the model can ground its message in the file names without
-// re-reading the whole diff twice.
+// description, then TL;DR summary) while showing an animated scramble
+// spinner whose label updates per phase. files is the list of changed paths,
+// used as a compact summary so the model can ground its message in the file
+// names without re-reading the whole diff twice.
 func generateMessageProgress(ui *output.UI, ctx context.Context, client *ollama.Client, diff string, files []string) (gitops.CommitMessage, error) {
-	ui.Progress("generating commit message", 0.0)
+	ui.SpinnerStart("ollama", "generating commit message")
 
 	stat := "(no file changes)"
 	if len(files) > 0 {
@@ -323,15 +323,17 @@ func generateMessageProgress(ui *output.UI, ctx context.Context, client *ollama.
 
 	detail, err := client.DescribeDetail(ctx, diff, stat)
 	if err != nil {
+		ui.SpinnerStop()
 		return gitops.CommitMessage{}, err
 	}
-	ui.Progress("condensing to TL;DR", 0.5)
+	ui.SpinnerUpdate("condensing to TL;DR")
 
 	tldr, err := client.SummarizeTLDR(ctx, detail)
 	if err != nil {
+		ui.SpinnerStop()
 		return gitops.CommitMessage{}, err
 	}
-	ui.Progress("commit message ready", 1.0)
+	ui.SpinnerStop()
 
 	return gitops.CommitMessage{Subject: tldr, Body: detail}, nil
 }

@@ -116,9 +116,11 @@ func TestCommitResultUnsignedNonTTY(t *testing.T) {
 	}
 }
 
-func TestProgressNonTTY(t *testing.T) {
+func TestSpinnerNonTTY(t *testing.T) {
 	ui, _, err := newTestUI()
-	ui.Progress("condensing to TL;DR", 0.5)
+	ui.SpinnerStart("ollama", "generating commit message")
+	ui.SpinnerUpdate("condensing to TL;DR")
+	ui.SpinnerStop()
 	got := err.String()
 	if !strings.Contains(got, "INFO") {
 		t.Errorf("missing INFO level, got: %q", got)
@@ -126,11 +128,11 @@ func TestProgressNonTTY(t *testing.T) {
 	if !strings.Contains(got, "ollama") {
 		t.Errorf("missing ollama step, got: %q", got)
 	}
-	if !strings.Contains(got, "condensing to TL;DR") {
-		t.Errorf("missing caption, got: %q", got)
+	if !strings.Contains(got, "generating commit message") {
+		t.Errorf("missing start caption, got: %q", got)
 	}
-	if !strings.Contains(got, "50%") {
-		t.Errorf("missing percentage, got: %q", got)
+	if !strings.Contains(got, "condensing to TL;DR") {
+		t.Errorf("missing update caption, got: %q", got)
 	}
 }
 

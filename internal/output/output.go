@@ -1,8 +1,8 @@
 // Package output centralizes all user-facing formatting for omc.
 //
-// It renders a structured, timestamped terminal UI built on charmbracelet
-// bubbles + lipgloss. Every line emitted — diagnostics, progress, and final
-// results — is a structured log record of the form:
+// It renders a structured, timestamped terminal UI built on lipgloss. Every
+// line emitted — diagnostics, the live scramble spinner, and final results —
+// is a structured log record of the form:
 //
 //	<HH:MM:SS> <LEVEL> omc [<step>] <message> [key=value ...]
 //
@@ -15,10 +15,10 @@
 //	12:04:09 OK    omc tag    tagged         tag=v0.0.3 hash=9d3f2ab signed=true
 //
 // When stderr is a terminal the same records are rendered with color, icons,
-// aligned columns, and a gradient progress bar for the two-stage LLM
-// generation. Diagnostics and live progress go to stderr; the final commit
-// and tag results go to stdout, preserving the Unix convention that stdout
-// carries program output.
+// aligned columns, and an animated scramble spinner (see anim.go) for
+// long-running steps such as the two-stage LLM generation. Diagnostics and
+// the live spinner go to stderr; the final commit and tag results go to
+// stdout, preserving the Unix convention that stdout carries program output.
 //
 // When stderr is not a terminal (piped output, captured tests, CI logs) the
 // colored rendering is suppressed and omc falls back to the plain
@@ -33,8 +33,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/bubbles/progress"
-	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
 )
@@ -60,7 +58,6 @@ var palette = struct {
 	key       lipgloss.Color
 	val       lipgloss.Color
 	spinner   lipgloss.Color
-	progress  lipgloss.Color
 }{
 	brand:     lipgloss.Color("#7D56F4"),
 	subject:   lipgloss.Color("#EE6FF8"),
@@ -78,7 +75,6 @@ var palette = struct {
 	key:       lipgloss.Color("#6E7681"),
 	val:       lipgloss.Color("#C9D1D9"),
 	spinner:   lipgloss.Color("#EE6FF8"),
-	progress:  lipgloss.Color("#7D56F4"),
 }
 
 // Field is a single structured key=value pair appended to a log line.
@@ -95,15 +91,14 @@ type UI struct {
 	Out io.Writer // program output (final result, tag result)
 	Err io.Writer // diagnostics, progress, errors
 
-	tty      bool
-	styles   styles
-	progress progress.Model
+	tty    bool
+	styles styles
 
-	mu      sync.Mutex
-	spin    spinner.Model
-	spinOn  bool
-	spinCtx chan struct{}
-	spinPct int
+	mu       sync.Mutex
+	anim     *anim
+	animOn   bool
+	animCtx  chan struct{}
+	animStep string
 }
 
 type styles struct {
@@ -128,7 +123,6 @@ type styles struct {
 	meta      lipgloss.Style
 	bullet    lipgloss.Style
 	fileItem  lipgloss.Style
-	progress  lipgloss.Style
 }
 
 // New returns a UI writing to the passed streams. TTY detection is performed
@@ -145,12 +139,6 @@ func New(out, err io.Writer) *UI {
 		tty: tty,
 	}
 	ui.initStyles()
-	ui.progress = progress.New(
-		progress.WithGradient("#5A56E0", "#EE6FF8"),
-		progress.WithoutPercentage(),
-	)
-	ui.progress.Width = 36
-	ui.spin = spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(lipgloss.NewStyle().Foreground(palette.spinner)))
 	return ui
 }
 
@@ -178,7 +166,6 @@ func (u *UI) initStyles() {
 		meta:      base.Foreground(palette.muted),
 		bullet:    base.Foreground(palette.accent),
 		fileItem:  base.Foreground(palette.accent),
-		progress:  base.Foreground(palette.muted),
 	}
 }
 
@@ -326,29 +313,34 @@ func (u *UI) Step(step, msg string, fn func() error) error {
 	return nil
 }
 
-// startSpinner launches a goroutine that animates the bubbles spinner on
-// stderr. Only one spinner may be active at a time.
+// startSpinner launches a goroutine that animates the scramble spinner on
+// stderr. Only one spinner may be active at a time. The label can be changed
+// live via updateSpinner.
 func (u *UI) startSpinner(step, msg string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if u.spinOn {
+	if u.animOn {
 		return
 	}
-	u.spinOn = true
-	u.spinPct = 0
-	u.spinCtx = make(chan struct{})
+	u.animOn = true
+	u.animStep = step
+	u.anim = newAnim(animSettings{
+		label:      msg,
+		labelColor: palette.spinner,
+		gradA:      palette.brand,
+		gradB:      palette.subject,
+		size:       animDefaultSize,
+		seed:       uint64(time.Now().UnixNano()),
+	})
+	u.animCtx = make(chan struct{})
 
 	ts := u.styles.timestamp.Render(now())
 	level := u.styles.levelInfo.Render(StatePending + " ··")
 	brand := u.styles.brand.Render(Brand)
 	stepLbl := u.styles.step.Render(stepIcon(step))
-	msgLbl := u.styles.msg.Render(msg)
-	fps := u.spin.Spinner.FPS
-	if fps <= 0 {
-		fps = time.Second / 10 //nolint:mnd
-	}
+	fps := time.Second / animFPS
 
-	go func(stop <-chan struct{}, ts, brand, stepLbl, msgLbl string) {
+	go func(stop <-chan struct{}, ts, level, brand, stepLbl string) {
 		tk := time.NewTicker(fps)
 		defer tk.Stop()
 		for {
@@ -357,70 +349,78 @@ func (u *UI) startSpinner(step, msg string) {
 				return
 			case <-tk.C:
 				u.mu.Lock()
-				if !u.spinOn {
+				if !u.animOn || u.anim == nil {
 					u.mu.Unlock()
 					return
 				}
-				// Simulated, always-looping progress: ignore real work,
-				// just climb 0..100 and wrap so the spinner always looks
-				// busy and exciting.
-				u.spinPct += 3
-				if u.spinPct > 100 {
-					u.spinPct = 0
-				}
-				u.spin, _ = u.spin.Update(spinner.TickMsg{Time: time.Now(), ID: u.spin.ID()})
-				frame := u.spin.View()
-				pct := u.styles.progress.Render(fmt.Sprintf("%3d%%", u.spinPct))
-				line := fmt.Sprintf("\r%s %s %s %s %s %s %s", ts, level, brand, frame, pct, stepLbl, msgLbl)
-				// pad to clear trailing chars from a previous, longer frame.
+				u.anim.tick()
+				frame := u.anim.render()
+				line := fmt.Sprintf("\r%s %s %s %s %s", ts, level, brand, stepLbl, frame)
 				fmt.Fprint(u.Err, line)
 				u.mu.Unlock()
 			}
 		}
-	}(u.spinCtx, ts, brand, stepLbl, msgLbl)
+	}(u.animCtx, ts, level, brand, stepLbl)
+}
+
+// updateSpinner changes the live label of the running spinner. Safe to call
+// while the spinner goroutine is animating.
+func (u *UI) updateSpinner(msg string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.anim != nil {
+		u.anim.setLabel(msg)
+	}
 }
 
 // stopSpinner stops the active spinner goroutine and clears its line.
 func (u *UI) stopSpinner() {
 	u.mu.Lock()
-	if !u.spinOn {
+	if !u.animOn {
 		u.mu.Unlock()
 		return
 	}
-	u.spinOn = false
-	close(u.spinCtx)
-	u.spinCtx = nil
+	u.animOn = false
+	close(u.animCtx)
+	u.animCtx = nil
+	u.anim = nil
 	// Clear the spinner line.
 	fmt.Fprint(u.Err, "\r\033[K")
 	u.mu.Unlock()
 }
 
-// --- Progress -----------------------------------------------------------------
+// --- Live spinner (LLM generation) --------------------------------------------
 
-// Progress renders a static progress bar at the given ratio (0..1) with an
-// optional caption. On a non-TTY it prints a plain structured status line
-// instead.
-func (u *UI) Progress(caption string, ratio float64) {
-	if ratio < 0 {
-		ratio = 0
-	}
-	if ratio > 1 {
-		ratio = 1
-	}
+// SpinnerStart begins an animated scramble spinner for a long-running
+// asynchronous step such as the two-stage Ollama generation. Pair it with
+// SpinnerUpdate and SpinnerStop. On a non-TTY it emits a structured INFO
+// line instead of animating, keeping captured logs greppable.
+func (u *UI) SpinnerStart(step, msg string) {
 	if !u.tty {
-		u.emit(u.Err, "INFO", "ollama", caption, F("progress", fmt.Sprintf("%3.0f%%", ratio*100)))
+		u.emit(u.Err, "INFO", step, msg)
 		return
 	}
-	bar := u.progress.ViewAs(ratio)
-	cap := u.styles.progress.Render(caption)
-	u.println(u.Err, fmt.Sprintf("%s %s %s %s %s  %s",
-		u.styles.timestamp.Render(now()),
-		u.styles.levelInfo.Render(StatePending+" INFO"),
-		u.styles.brand.Render(Brand),
-		u.styles.step.Render(stepIcon("ollama")),
-		cap,
-		bar,
-	))
+	u.startSpinner(step, msg)
+}
+
+// SpinnerUpdate changes the live label of the running spinner (e.g. moving
+// from "generating commit message" to "condensing to TL;DR"). On a non-TTY
+// it emits a fresh structured INFO line for the new phase.
+func (u *UI) SpinnerUpdate(msg string) {
+	if !u.tty {
+		u.emit(u.Err, "INFO", u.animStep, msg)
+		return
+	}
+	u.updateSpinner(msg)
+}
+
+// SpinnerStop stops the running spinner and clears its line. On a non-TTY it
+// is a no-op; the structured announce/complete lines carry the state.
+func (u *UI) SpinnerStop() {
+	if !u.tty {
+		return
+	}
+	u.stopSpinner()
 }
 
 // --- Diagnostic / status lines ------------------------------------------------
