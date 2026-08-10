@@ -18,7 +18,7 @@ instance. Every line of output is a structured, timestamped log record.
 - **No CLI flags.** All configuration comes from the environment:
   `OMC_SIGN_KEY_PATH`, `OLLAMA_DESC_URL`, `OLLAMA_DESC_MODEL`,
   `OMC_NAME`, `OMC_EMAIL`, `OMC_SUBJECT`, `OMC_MESSAGE`,
-  `OMC_TAG`.
+  `OMC_TAG`, `OMC_PUSH_KEY_PATH`.
 - **No runtime dependency on external binaries.** No `git`, no `ssh-keygen`.
   Everything uses libraries: `github.com/go-git/go-git/v5` for repository
   operations, `github.com/hiddeco/sshsig` + `golang.org/x/crypto/ssh` for
@@ -26,18 +26,20 @@ instance. Every line of output is a structured, timestamped log record.
 - **Always degrade, never block.** If Ollama is unreachable or the LLM call
   fails, fall back to the default subject `update` and continue. If the key
   file is missing/invalid when configured, log a warning and commit
-  unsigned. Not being in a repo is an error.
+  unsigned. If `OMC_PUSH_KEY_PATH` is set but unusable, or the push fails,
+  log a warning and leave the commit and tag local (never rolled back). Not
+  being in a repo is an error.
 - **Pure Go, single static binary.** Any new dependency must be pure Go.
 
 ## Where things live
 
 ```
-cmd/omc/main.go       pipeline: repo → stage → diff → (overrides|ollama) → (sign) → commit → tag
-internal/config/      config.FromEnv() reads the eight env vars
+cmd/omc/main.go       pipeline: repo → stage → diff → (overrides|ollama) → (sign) → commit → tag → (push)
+internal/config/      config.FromEnv() reads the nine env vars
 internal/gitops/      PlainOpen detection, StageAll, StagedDiff, Commit,
                       SignedCommit, ResolveIdentity, index→tree writer,
                       LatestSemverTag, NextSemverTag, CreateTag, SignedTag,
-                      ValidSemverTag, NormalizeTag
+                      ValidSemverTag, NormalizeTag, PushToRemote
 internal/sign/        sign.Load(keyPath), signer.Sign(payload) → armored SSH sig
 internal/ollama/      Client.Available(), DescribeDetail(), SummarizeTLDR()
 internal/output/      UI: stdout = structured results, stderr = structured diagnostics
@@ -152,6 +154,28 @@ the leading `v` for bare versions.
 | `OMC_SUBJECT`       | Override the commit subject (skips LLM generation)   | Trimmed; see pairing rules above          |
 | `OMC_MESSAGE`       | Override the commit body (skips LLM generation)      | Trimmed; see pairing rules above          |
 | `OMC_TAG`           | Override the tag name (strict semver only)           | Invalid → warn + auto-bump fallback       |
+| `OMC_PUSH_KEY_PATH` | Path to SSH private key for pushing to the remote    | Unreadable/unusable or push fails → warn, leave local |
+
+## Pushing (OMC_PUSH_KEY_PATH)
+
+After the commit and the semver tag are created, `omc` optionally pushes
+them to the repository's default remote — the go-git equivalent of
+`git push; git push --tags`:
+
+1. `OMC_PUSH_KEY_PATH` must be set **and** the key file readable. If it is
+   unset, no push happens. If it is set but unreadable/unparseable, `omc`
+   logs a warning and skips the push.
+2. The current branch is pushed first (`refs/heads/<branch>`), then all
+   local tags (`+refs/tags/*`), mirroring `git push --tags`.
+3. The key authenticates over SSH. For non-SSH remotes (https/file) the key
+   is not applicable and go-git's default auth is used. When the key path is
+   empty, go-git falls back to its default auth (SSH agent).
+4. `NoErrAlreadyUpToDate` is treated as success. Any other failure (no
+   remote, non-fast-forward, network) logs a warning and exits 0 — the
+   commit and tag are never rolled back over a push problem.
+
+`gitops.PushToRemote(repo, keyPath)` returns a `PushResult{Remote, Branch,
+Tags}`; `output.UI.PushResult` renders the structured `pushed` record.
 
 ## Git identity
 

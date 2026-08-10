@@ -509,3 +509,92 @@ func TestMainEndToEndCleanTree(t *testing.T) {
 		t.Errorf("commit count = %s, want 1 (no new commit)", got)
 	}
 }
+
+// TestMainEndToEndSignedTag verifies task (b): when a valid
+// OMC_SIGN_KEY_PATH is configured, the auto-bumped semver tag (v0.0.1) must
+// ALWAYS be SSH-signed with the same key used for the commit. The signature
+// is verified with `git tag -v`, which accepts go-git's byte-conformant
+// signed tag objects.
+func TestMainEndToEndSignedTag(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping binary e2e in short mode")
+	}
+	bin := filepath.Join(t.TempDir(), "omc")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+
+	dir := t.TempDir()
+	repoDir := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	init := exec.Command("git", "init", "-q")
+	init.Dir = repoDir
+	if out, err := init.CombinedOutput(); err != nil {
+		t.Skipf("git unavailable: %v\n%s", err, out)
+	}
+
+	// Generate a fresh, unencrypted ed25519 key.
+	keygen := exec.Command("ssh-keygen", "-t", "ed25519", "-N", "", "-f", filepath.Join(dir, "id"), "-q")
+	if out, err := keygen.CombinedOutput(); err != nil {
+		t.Skipf("ssh-keygen unavailable: %v\n%s", err, out)
+	}
+	keyPath := filepath.Join(dir, "id")
+
+	// Configure git to verify SSH signatures against the generated public
+	// key, so `git tag -v` can actually validate the tag.
+	pub, err := os.ReadFile(keyPath + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := filepath.Join(dir, "allowed_signers")
+	if err := os.WriteFile(allowed, []byte("e2e@example.com "+strings.TrimSpace(string(pub))+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range []string{
+		"gpg.format ssh",
+		"gpg.ssh.allowedSignersFile " + allowed,
+	} {
+		parts := strings.SplitN(kv, " ", 2)
+		cfg := exec.Command("git", "config", parts[0], parts[1])
+		cfg.Dir = repoDir
+		if out, err := cfg.CombinedOutput(); err != nil {
+			t.Fatalf("git config %s: %v\n%s", kv, err, out)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(repoDir, "hello.txt"), []byte("signed tag e2e\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin)
+	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(),
+		"OMC_SIGN_KEY_PATH="+keyPath,
+		"OMC_NAME=E2E User",
+		"OMC_EMAIL=e2e@example.com",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("omc failed: %v\n%s", err, out)
+	}
+
+	// The tag result must report signed=true.
+	if !strings.Contains(string(out), "signed=true") {
+		t.Errorf("tag not reported as signed: %s", out)
+	}
+
+	// The tag object must carry an armored SSH signature, whose validity
+	// git accepts.
+	tagv := exec.Command("git", "tag", "-v", "v0.0.1")
+	tagv.Dir = repoDir
+	tagOut, err := tagv.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git tag -v v0.0.1 rejected signature: %v\n%s", err, tagOut)
+	}
+	if !strings.Contains(string(tagOut), "Good") {
+		t.Errorf("signature not verified: %s", tagOut)
+	}
+}

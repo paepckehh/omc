@@ -39,6 +39,11 @@ type Config struct {
 	// only when it parses as a strict vMAJOR.MINOR.PATCH semver tag;
 	// otherwise the normal LatestSemverTag/NextSemverTag path runs.
 	Tag string
+	// PushKeyPath points at an SSH private key used to authenticate
+	// against the repository's remote when pushing. Optional: empty
+	// disables pushing. When set but unusable, omc logs a warning and
+	// skips the push.
+	PushKeyPath string
 }
 
 // FromEnv loads the configuration from the process environment.
@@ -52,6 +57,7 @@ func FromEnv() Config {
 		Subject:     os.Getenv("OMC_SUBJECT"),
 		Message:     os.Getenv("OMC_MESSAGE"),
 		Tag:         os.Getenv("OMC_TAG"),
+		PushKeyPath: expandTilde(os.Getenv("OMC_PUSH_KEY_PATH")),
 	}
 }
 

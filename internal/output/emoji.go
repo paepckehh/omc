@@ -6,8 +6,8 @@
 //     glyph; the empty string is returned for unknown levels.
 //   - Action emojis encode the pipeline step / verb (📂 open, 📥 stage,
 //     🔍 diff, 🤖 ollama, 🔑 load key, 📝 commit, 🏷️ tag, ✍️ sign,
-//     💬 msg). ActionEmoji maps a step name to its glyph; the empty
-//     string is returned for unknown steps.
+//     💬 msg, 🚀 push). ActionEmoji maps a step name to its glyph; the
+//     empty string is returned for unknown steps.
 //
 // The text tokens (OK / INFO / WARN / FAIL / step names) are kept intact
 // in the rendered line — the emojis are prepended so the records stay
@@ -57,4 +57,5 @@ var actionIcons = map[string]string{
 	"tag":      "🏷️", // semver tagging
 	"sign":     "✍️", // signing notice
 	"msg":      "💬",  // commit message preview
+	"push":     "🚀",  // pushing to the remote
 }

@@ -7,6 +7,7 @@ package gitops
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -16,9 +17,12 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	sshpkg "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 )
 
 // ErrNotARepository is returned when the current directory is not inside a
@@ -672,4 +676,149 @@ func semverLess(a, b *semver) bool {
 		return a.minor < b.minor
 	}
 	return a.patch < b.patch
+}
+
+// --- Push to the remote -------------------------------------------------------
+
+// PushResult describes the outcome of a push.
+type PushResult struct {
+	// Remote is the remote name that was pushed to.
+	Remote string
+	// Branch is the local branch that was pushed ("" on detached HEAD).
+	Branch string
+	// Tags reports whether the tags were pushed.
+	Tags bool
+}
+
+// ErrNoRemoteConfigured is returned when the repository has no remote to
+// push to.
+var ErrNoRemoteConfigured = fmt.Errorf("no remote configured")
+
+// PushToRemote pushes the current branch and all local tags to the
+// repository's default remote, the go-git equivalent of "git push; git
+// push --tags". keyPath is an optional SSH private key used for
+// authentication; when empty, go-git falls back to its default auth (SSH
+// agent). For file:// or https URLs the key is not applicable.
+//
+// NoErrAlreadyUpToDate is treated as success (nothing to push).
+// ErrForceNeeded / non-fast-forward errors from the tag pass are returned
+// as errors; the branch push itself already succeeded at that point.
+func PushToRemote(repo *git.Repository, keyPath string) (PushResult, error) {
+	cfg, err := repo.Config()
+	if err != nil {
+		return PushResult{}, fmt.Errorf("read remote config: %w", err)
+	}
+	if len(cfg.Remotes) == 0 {
+		return PushResult{}, ErrNoRemoteConfigured
+	}
+
+	// Prefer "origin", like git; otherwise use the first configured
+	// remote. The default branch refspec is resolved by go-git
+	// (refs/heads/*:refs/heads/*).
+	remoteName := git.DefaultRemoteName
+	if _, ok := cfg.Remotes[remoteName]; !ok {
+		for name := range cfg.Remotes {
+			remoteName = name
+			break
+		}
+	}
+	remoteCfg := cfg.Remotes[remoteName]
+
+	// Keep the remote config in scope: the Remote abstraction is
+	// constructed for each pass below, so the config object must stay
+	// alive between pushes. Reading the branch from HEAD names the
+	// explicit refspec for the first pass.
+	branch := ""
+	if ref, err := repo.Head(); err == nil && ref.Name().IsBranch() {
+		branch = ref.Name().Short()
+	}
+
+	auth, err := getSSHAuth(keyPath, remoteCfg.URLs)
+	if err != nil {
+		return PushResult{}, err
+	}
+
+	opts := &git.PushOptions{RemoteName: remoteName, Auth: auth}
+	if branch != "" {
+		opts.RefSpecs = []config.RefSpec{
+			config.RefSpec("refs/heads/" + branch + ":refs/heads/" + branch),
+		}
+	}
+	if err := pushOnce(repo, remoteCfg, opts); err != nil {
+		if errors.Is(err, git.NoErrAlreadyUpToDate) {
+			return PushResult{Remote: remoteName, Branch: branch, Tags: false}, nil
+		}
+		return PushResult{}, err
+	}
+
+	// Second pass mirrors "git push --tags": update every refs/tags/*
+	// that exists locally. Like git, the tag refspec is forced, so a
+	// remote tag that already points elsewhere is updated.
+	if err := pushOnce(repo, remoteCfg, &git.PushOptions{
+		RemoteName: remoteName,
+		Auth:       auth,
+		RefSpecs:   []config.RefSpec{config.RefSpec("+refs/tags/*:refs/tags/*")},
+	}); err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return PushResult{
+			Remote: remoteName,
+			Branch: branch,
+			Tags:   false,
+		}, fmt.Errorf("push tags: %w", err)
+	}
+
+	return PushResult{Remote: remoteName, Branch: branch, Tags: true}, nil
+}
+
+// pushOnce runs a single push operation through the Remote abstraction.
+func pushOnce(repo *git.Repository, cfg *config.RemoteConfig, opts *git.PushOptions) error {
+	remote := git.NewRemote(repo.Storer, cfg)
+	return remote.PushContext(context.Background(), opts)
+}
+
+// getSSHAuth builds an SSH auth method from an SSH private key path,
+// listing the remote's configured URLs. Only usable together with an SSH
+// remote URL. For non-SSH remotes and empty key paths it returns a nil
+// transport.AuthMethod, which makes go-git fall back to its default auth
+// (SSH agent for ssh URLs, no auth for https/file URLs).
+// getSSHAuth builds an SSH auth method from an SSH private key path,
+// listing the remote's configured URLs. Only usable together with an SSH
+// remote URL. For non-SSH remotes and empty key paths it returns a nil
+// transport.AuthMethod, which makes go-git fall back to its default auth
+// (SSH agent for ssh URLs, no auth for https/file URLs).
+//
+// HostKeyCallback is deliberately left nil so go-git verifies the server
+// host key against ~/.ssh/known_hosts (and SSH_KNOWN_HOSTS), exactly like
+// git. A host that is not in known_hosts makes the push fail with a warning
+// rather than silently trusting an unknown server.
+func getSSHAuth(keyPath string, remoteURLs []string) (transport.AuthMethod, error) {
+	last := remoteURLs[len(remoteURLs)-1]
+	ep, err := transport.NewEndpoint(last)
+	if err != nil {
+		return nil, fmt.Errorf("parse remote url: %w", err)
+	}
+	if ep.Protocol != "ssh" {
+		return nil, nil
+	}
+
+	user := ep.User
+	if user == "" {
+		user = os.Getenv("USER")
+		if user == "" {
+			user = "git"
+		}
+	}
+
+	if keyPath == "" {
+		auth, err := sshpkg.NewSSHAgentAuth(user)
+		if err != nil {
+			return nil, fmt.Errorf("ssh agent auth: %w", err)
+		}
+		return auth, nil
+	}
+
+	auth, err := sshpkg.NewPublicKeysFromFile(user, keyPath, "")
+	if err != nil {
+		return nil, fmt.Errorf("load push key %s: %w", keyPath, err)
+	}
+	return auth, nil
 }

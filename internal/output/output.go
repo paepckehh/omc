@@ -555,3 +555,15 @@ func (u *UI) SigningNotice(keyPath string, enabled bool) {
 	}
 	u.emit(u.Err, "OK", "sign", "committing unsigned", F("signed", "false"))
 }
+
+// PushResult renders the post-push notice to stdout: the remote that was
+// pushed to, the pushed branch (empty on detached HEAD), and whether the
+// tag pass ran. The fields are emitted as separate key=value tokens so
+// consumers can grep them.
+func (u *UI) PushResult(remote, branch string, tags bool) {
+	u.emit(u.Out, "OK", "push", "pushed",
+		F("remote", remote),
+		F("branch", branch),
+		F("tags", fmt.Sprintf("%v", tags)),
+	)
+}

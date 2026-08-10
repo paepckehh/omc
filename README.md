@@ -95,6 +95,9 @@ No flags to remember, no prompts to answer. Run it twice, get two commits and tw
 </td>
 <td width="50%" valign="top">
 
+### 🚀 Optional push
+Set `OMC_PUSH_KEY_PATH` to an SSH key and `omc` pushes the new commit and its tag to the default remote after tagging — `git push; git push --tags`, all in-process via go-git. Failures degrade: the commit and tag stay local, never rolled back.
+
 </td>
 </tr>
 </table>
@@ -305,6 +308,12 @@ git push
 Nothing has left your machine until step 3. The agent can't sneak work past you;
 every change is gated on a human verifying the signature *and* the diff.
 
+> **Opt-in automation:** if you *do* want the agent to publish, hand it a
+> dedicated, low-privilege push key via `OMC_PUSH_KEY_PATH`. The push still
+> happens only after the commit and tag are created, and a failed push never
+> rolls back the local work — so the worst case is a local commit you can
+> review and push yourself.
+
 ### 3. Attestation for audit trails
 
 Signed, described commits give you a cryptographically verifiable record of
@@ -346,6 +355,7 @@ omc
 | `OMC_SUBJECT` | Override the commit subject. When set, **no LLM generation runs**. See [Message & tag overrides](#-message--tag-overrides). |
 | `OMC_MESSAGE` | Override the commit body. When set, **no LLM generation runs**. See [Message & tag overrides](#-message--tag-overrides). |
 | `OMC_TAG` | Override the tag name. Used only when it is strict semver `vMAJOR.MINOR.PATCH`; otherwise the auto-bump runs. See [Message & tag overrides](#-message--tag-overrides). |
+| `OMC_PUSH_KEY_PATH` | Path to an SSH **private** key. When set and readable, pushes the new commit and tags to the default remote after tagging (`git push; git push --tags`). If set but unusable, or the push fails, warns and leaves the commit/tag local. |
 
 > **Signing:** only passphrase-less keys are supported (there is no interactive
 > prompt, by design). `ssh-keygen -t ed25519 -N "" -C agent@paepcke.de -f ~/.ssh/agent`
@@ -467,6 +477,37 @@ tagger signature verified:
 </details>
 
 <details>
+<summary><b>🚀 Pushing — OMC_PUSH_KEY_PATH</b></summary>
+
+After the commit and the semver tag are created, `omc` can push them to the
+repository's default remote — the go-git equivalent of `git push; git push
+--tags`, with no external `git` binary.
+
+1. `OMC_PUSH_KEY_PATH` must be set **and** the key file readable. If it is
+   unset, no push happens. If it is set but unreadable/unparseable, `omc`
+   logs a warning and skips the push.
+2. The current branch is pushed first (`refs/heads/<branch>`), then all
+   local tags (`+refs/tags/*`), mirroring `git push --tags`.
+3. The key authenticates over SSH. For non-SSH remotes (https/file) the key
+   is not applicable and go-git's default auth is used. When the key path
+   is empty, go-git falls back to its default auth (SSH agent).
+4. `NoErrAlreadyUpToDate` is treated as success. Any other failure (no
+   remote, non-fast-forward, network) logs a warning and exits 0 — the
+   commit and tag are never rolled back over a push problem.
+
+```console
+$ export OMC_PUSH_KEY_PATH=~/.ssh/id_ed25519
+$ omc
+...
+12:04:09 OK omc tag tagged tag=v0.3.9 hash=9d3f2ab signed=true
+12:04:09 INFO omc push pushing commit and tags to remote
+12:04:10 OK omc push done
+12:04:10 OK omc push pushed remote=origin branch=main tags=true
+```
+
+</details>
+
+<details>
 <summary><b>👤 Git identity resolution order</b></summary>
 
 `internal/gitops.ResolveIdentity()` resolves the commit identity in this order:
@@ -499,6 +540,7 @@ the identity fallback; nothing else depends on them.
 │  6. create commit        (object.Commit, advance HEAD)       │
 │  7. print result         (structured, timestamped log line)  │
 │  8. auto-tag             (latest v*.*.* → patch+1, signed)   │
+│  9. optional push         (OMC_PUSH_KEY_PATH → git push --tags)│
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -519,7 +561,8 @@ cmd/omc/               entry point (env → pipeline → output)
 internal/config/       config.FromEnv() reads the env vars
 internal/gitops/       PlainOpen detection, StageAll, StagedDiff, Commit,
                        SignedCommit, ResolveIdentity, index→tree writer,
-                       semver tag discovery, CreateTag, SignedTag
+                       semver tag discovery, CreateTag, SignedTag,
+                       PushToRemote
 internal/sign/         sign.Load(keyPath), signer.Sign(payload) → armored SSH sig
 internal/ollama/       Client.Available(), DescribeDetail(), SummarizeTLDR()
 internal/output/       UI: stdout = structured results, stderr = structured diagnostics

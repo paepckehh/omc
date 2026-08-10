@@ -12,6 +12,7 @@ func TestFromEnv(t *testing.T) {
 	t.Setenv("OLLAMA_DESC_MODEL", "qwen2.5:7b")
 	t.Setenv("OMC_NAME", "Jane Doe")
 	t.Setenv("OMC_EMAIL", "jane@example.com")
+	t.Setenv("OMC_PUSH_KEY_PATH", "/keys/id_push")
 
 	c := FromEnv()
 	if c.KeyPath != "/keys/id_ed25519" {
@@ -29,6 +30,9 @@ func TestFromEnv(t *testing.T) {
 	if c.Email != "jane@example.com" {
 		t.Errorf("Email = %q, want jane@example.com", c.Email)
 	}
+	if c.PushKeyPath != "/keys/id_push" {
+		t.Errorf("PushKeyPath = %q, want /keys/id_push", c.PushKeyPath)
+	}
 }
 
 func TestFromEnvEmpty(t *testing.T) {
@@ -37,9 +41,10 @@ func TestFromEnvEmpty(t *testing.T) {
 	t.Setenv("OLLAMA_DESC_MODEL", "")
 	t.Setenv("OMC_NAME", "")
 	t.Setenv("OMC_EMAIL", "")
+	t.Setenv("OMC_PUSH_KEY_PATH", "")
 
 	c := FromEnv()
-	if c.KeyPath != "" || c.OllamaURL != "" || c.OllamaModel != "" || c.Name != "" || c.Email != "" {
+	if c.KeyPath != "" || c.OllamaURL != "" || c.OllamaModel != "" || c.Name != "" || c.Email != "" || c.PushKeyPath != "" {
 		t.Errorf("expected all empty, got %+v", c)
 	}
 }

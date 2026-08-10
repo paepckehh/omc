@@ -23,6 +23,11 @@
 //	OMC_TAG        override the tag name; used only when it parses as
 //	                   strict semver vMAJOR.MINOR.PATCH, otherwise the
 //	                   normal auto-bump path runs.
+//	OMC_PUSH_KEY_PATH  path to an SSH private key; if set and readable,
+//	                   omc pushes the new commit and tags to the default
+//	                   remote after tagging ("git push; git push --tags").
+//	                   If set but unusable, the push is skipped with a
+//	                   warning; the commit and tag are never rolled back.
 //
 // omc runs inside a git repository and performs the equivalent of
 //
@@ -210,6 +215,21 @@ func run() int {
 	}
 
 	ui.TagResult(tagName, hash.String()[:7], signer != nil)
+
+	// 9. Optional push: when OMC_PUSH_KEY_PATH is set and the key file is
+	// readable, push the new commit and the new tag to the default remote
+	// ("git push; git push --tags"). All in-process via go-git. Failures
+	// degrade: the commit and tag are never rolled back over a push
+	// problem, matching the "always degrade, never block" contract.
+	if cfg.PushKeyPath != "" {
+		if err := ui.Step("push", "pushing commit and tags to remote", func() error {
+			_, err := gitops.PushToRemote(repo, cfg.PushKeyPath)
+			return err
+		}); err != nil {
+			ui.Warn("push failed (%v); commit and tag left local", err)
+		}
+	}
+
 	return 0
 }
 
