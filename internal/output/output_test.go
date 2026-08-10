@@ -77,6 +77,24 @@ func TestWarnNonTTY(t *testing.T) {
 	}
 }
 
+func TestConfigNoticeNonTTY(t *testing.T) {
+	ui, _, err := newTestUI()
+	ui.ConfigNotice(
+		[]Field{F("OMC_NAME", "Test"), F("OMC_TAG", "v1.2.3")},
+		[]Field{F("sign_key", "valid=false"), F("tag_override", "valid=true")},
+	)
+	got := err.String()
+	for _, wantSub := range []string{
+		"INFO", "config", "detected environment", "count=2",
+		"OMC_NAME=Test", "OMC_TAG=v1.2.3",
+		"verified config", "sign_key=valid=false", "tag_override=valid=true",
+	} {
+		if !strings.Contains(got, wantSub) {
+			t.Errorf("ConfigNotice output missing %q, got: %q", wantSub, got)
+		}
+	}
+}
+
 func TestCleanTreeNonTTY(t *testing.T) {
 	ui, _, err := newTestUI()
 	ui.CleanTree()

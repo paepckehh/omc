@@ -547,6 +547,22 @@ func (u *UI) Startup(version string) {
 	u.emit(u.Err, "INFO", "", Brand+" "+version)
 }
 
+// ConfigNotice prints the startup environment/configuration summary to
+// stderr, immediately following the version banner. detected lists the
+// environment variables that were set (non-empty); verified lists the
+// config options that passed a startup verification. Both are emitted as
+// structured INFO records with key=value fields so consumers can grep them.
+func (u *UI) ConfigNotice(detected, verified []Field) {
+	if len(detected) > 0 {
+		fields := append([]Field{F("count", fmt.Sprintf("%d", len(detected)))}, detected...)
+		u.emit(u.Err, "INFO", "config", "detected environment", fields...)
+	}
+	if len(verified) > 0 {
+		fields := append([]Field{F("count", fmt.Sprintf("%d", len(verified)))}, verified...)
+		u.emit(u.Err, "INFO", "config", "verified config", fields...)
+	}
+}
+
 // SigningNotice renders the signing-on / signing-off notice line.
 func (u *UI) SigningNotice(keyPath string, enabled bool) {
 	if enabled {

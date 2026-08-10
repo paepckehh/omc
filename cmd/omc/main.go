@@ -43,6 +43,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -64,6 +65,7 @@ func run() int {
 	ui := output.New(os.Stdout, os.Stderr)
 	ui.Startup(version.Version)
 	cfg := config.FromEnv()
+	ui.ConfigNotice(configReport(cfg))
 
 	// 1. Find the repository we are inside of.
 	var (
@@ -236,6 +238,54 @@ func run() int {
 	}
 
 	return 0
+}
+
+// configReport derives the startup diagnostic summary shown right after the
+// version banner. detected lists the environment variables that were set
+// (non-empty); verified lists the config options that passed a startup
+// verification (key files loadable, tag override strict semver, Ollama
+// configured). Values are collapsed to a single line so each variable keeps
+// the structured record on one greppable line.
+func configReport(cfg config.Config) (detected, verified []output.Field) {
+	set := func(env, val string) {
+		if strings.TrimSpace(val) != "" {
+			detected = append(detected, output.F(env, oneLine(val)))
+		}
+	}
+	set("OMC_SIGN_KEY_PATH", cfg.KeyPath)
+	set("OLLAMA_DESC_URL", cfg.OllamaURL)
+	set("OLLAMA_DESC_MODEL", cfg.OllamaModel)
+	set("OMC_NAME", cfg.Name)
+	set("OMC_EMAIL", cfg.Email)
+	set("OMC_SUBJECT", cfg.Subject)
+	set("OMC_MESSAGE", cfg.Message)
+	set("OMC_TAG", cfg.Tag)
+	set("OMC_PUSH_KEY_PATH", cfg.PushKeyPath)
+
+	if cfg.KeyPath != "" {
+		verified = append(verified, output.F("sign_key", fmt.Sprintf("valid=%v", sign.DetectKind(cfg.KeyPath) != sign.KindBroken)))
+	}
+	if cfg.PushKeyPath != "" {
+		verified = append(verified, output.F("push_key", fmt.Sprintf("valid=%v", sign.DetectKind(cfg.PushKeyPath) != sign.KindBroken)))
+	}
+	if cfg.Tag != "" {
+		verified = append(verified, output.F("tag_override", fmt.Sprintf("valid=%v", gitops.ValidSemverTag(cfg.Tag))))
+	}
+	if cfg.OllamaURL != "" {
+		verified = append(verified, output.F("ollama", "configured=true"))
+	}
+	return detected, verified
+}
+
+// oneLine collapses a value to a single trimmed line (newlines and runs of
+// whitespace become single spaces) and caps it at 120 chars so an override
+// such as a multi-line OMC_MESSAGE cannot break the structured log record.
+func oneLine(s string) string {
+	s = strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+	if len(s) > 120 {
+		s = s[:120] + "..."
+	}
+	return s
 }
 
 // pushNothing performs the push step when there was nothing to commit or
