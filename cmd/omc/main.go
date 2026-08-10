@@ -138,6 +138,10 @@ func run() int {
 		msg = override
 		ui.Info("message override active (OMC_SUBJECT/OMC_MESSAGE)")
 	} else if cfg.OllamaURL != "" {
+		// The two-stage LLM generation is its own nested group: the grasp
+		// probe step (INFO + OK) plus the spinner-phase records. Off a TTY
+		// the group is a no-op and the flat records stay greppable.
+		ui.BeginGroup("💬 message generation", 2) // ollama probe INFO + OK
 		client := ollama.New(cfg.OllamaURL, cfg.OllamaModel)
 		if reachable := ollamaReachable(ui, ctx, client, cfg.OllamaURL); reachable {
 			var genErr error
@@ -149,70 +153,92 @@ func run() int {
 		} else {
 			ui.Warn("ollama not reachable at %s, using default message", cfg.OllamaURL)
 		}
+		ui.EndGroup()
 	}
 
 	// Preview the resolved commit message.
 	ui.Summary(msg.Subject, msg.Body)
 
-	// 5. Sign the commit with the configured SSH key (opt-in).
+	// 5. Sign the commit with the configured SSH key (opt-in). The signer
+	// resolution is its own logical group: the key-load step, the resolved
+	// algorithm notice (loadSigner emits it), and the smartcard touch
+	// notice belong together under one header.
 	var signer *sign.Signer
 	skMode := false
 	if cfg.KeyPath != "" {
+		ui.BeginGroup("🔑 signing key", 3)
 		signer, skMode = loadSigner(ui, cfg)
+		if skMode && signer != nil {
+			ui.SecurityKeyModeNotice(cfg.KeyPath, signer.PublicAlgorithm())
+			ui.SecurityKeyTouchNotice(cfg.KeyPath, "the commit signing")
+		}
+		ui.EndGroup()
 	}
 
 	// Commit signed state is derived from the signer that was actually
 	// established, including the security-key (smartcard) degrade path.
 	// Loader warnings already explain the details; the notice line states
 	// the final mode so the record is unambiguous.
-	if skMode && signer != nil {
-		ui.SecurityKeyModeNotice(cfg.KeyPath, signer.PublicAlgorithm())
-		ui.SecurityKeyTouchNotice(cfg.KeyPath, "the commit signing")
-	} else {
-		ui.SigningNotice(cfg.KeyPath, signer != nil)
-	}
-
-	// 6. Create the commit, signing it when a key is available.
 	id := gitops.ResolveIdentity(repo)
-	var hash plumbing.Hash
-	commitStep := ui.Step
+	var (
+		commitStep func(step, msg string, fn func() error) error = ui.Step
+		tagStep    func(step, msg string, fn func() error) error = ui.Step
+	)
+	skCommit := skMode && signer != nil
+
+	// 6. Create the commit, signing it when a key is available. The commit,
+	// its semver tag, and the optional push form one logical "committing &
+	// publishing" group; inside it, each publish phase opens its own nested
+	// group so the whole run reads as one tree: commit → tag → push. Every
+	// line emitted inside a sub-group also consumes one line from every
+	// open ancestor, so the outer group's budget is the exact sum of the
+	// sub-group budgets (all computed upfront). Each sub-group closes
+	// itself once its budget is exhausted, so no per-phase EndGroup is
+	// needed; the last phase's closing line renders └─ for every level.
+	commitLines := 2 // step OK + commit result
+	if skCommit {
+		commitLines = 3 // touch confirmed + step OK + commit result
+	} else if cfg.KeyPath == "" {
+		commitLines = 3 // unsigned notice + step OK + commit result
+	}
+	tagLines := 2 // step OK + tag result (an OMC_TAG warning shifts these)
 	if skMode && signer != nil {
-		commitStep = ui.StepTouchCommit
+		tagLines += 2 // touch notice + touch confirmed
 	}
-	// The commit, its semver tag, and the optional push form one logical
-	// "commit & publish" group: commit step + result, tag step + result,
-	// and (when configured) the push step. lineCount accounts for the
-	// optional push so the colored tree closes with └─ on the last line;
-	// when a push is configured we also reserve a slot for the degradation
-	// WARN emitted on push failure so it stays under the tree.
-	publishLines := 4
+	pushLines := 0
 	if cfg.PushKeyPath != "" {
-		publishLines += 2
-	}
-	ui.BeginGroup("📦 committing & publishing", publishLines)
-	commitErr := commitStep("commit", commitLabel(id, signer != nil), func() error {
-		if signer != nil {
-			h, err := gitops.SignedCommit(repo, wt, msg, func(payload []byte) ([]byte, error) {
-				return signer.Sign(payload)
-			})
-			hash = h
-			return err
+		pushLines = 1 // step completion (OK or FAIL); a failure WARN degrades flat
+		if sign.IsSecurityKeyPath(cfg.PushKeyPath) {
+			pushLines = 3 // touch notice + touch confirmed + step completion
 		}
-		h, err := gitops.Commit(repo, wt, msg)
-		hash = h
-		return err
-	})
+	}
+	ui.BeginGroup("📦 committing & publishing", commitLines+tagLines+pushLines)
+
+	// 6a. Commit phase: the commit step and its result form a nested group
+	// under "committing & publishing". The smartcard path wraps the step in
+	// the touch countdown; the notices that announce the smartcard mode
+	// were already emitted inside the "signing key" group above.
+	ui.BeginGroup("📝 commit", commitLines)
+	if skCommit {
+		commitStep = func(step, msg string, fn func() error) error {
+			return ui.StepTouchCommit(cfg.KeyPath, "the commit signing", step, msg, fn)
+		}
+	} else if cfg.KeyPath == "" {
+		// No key configured at all: announce the unsigned path here (the
+		// configured-but-broken degrade case is already covered by the
+		// signer group's warnings above).
+		ui.SigningNotice("", false)
+	}
+	hash, commitErr := commitRoutine(commitStep, repo, wt, msg, signer, commitLabel(id, signer != nil))
 	if commitErr != nil {
+		ui.EndGroup()
 		ui.EndGroup()
 		ui.Error(commitErr)
 		return 1
 	}
-
-	// 7. Show what was committed (structured record; the git log is left to
-	// the user's own `git log` invocation).
 	ui.CommitResult(hash.String()[:7], signer != nil)
 
-	// 8. Tag the new commit with the next semver patch (vX.Y.N+1). The tag
+	// 7. Tag the new commit with the next semver patch (vX.Y.N+1). The tag
 	// message is the commit subject; the tag is SSH-signed when a signer is
 	// available, otherwise unsigned.
 	tagSubject := msg.Subject
@@ -221,11 +247,16 @@ func run() int {
 	}
 
 	var tagName string
-	tagStep := ui.Step
-	if signer != nil && skMode {
-		tagStep = ui.StepTouchTag
+	if skMode && signer != nil {
+		tagStep = func(step, msg string, fn func() error) error {
+			return ui.StepTouchTag(cfg.KeyPath, "the tag signing", step, msg, fn)
+		}
 	}
-	if err := tagStep("tag", tagStepLabel(cfg), func() error {
+	ui.BeginGroup("🏷️ tag", tagLines)
+	if skMode && signer != nil {
+		ui.SecurityKeyTouchNotice(cfg.KeyPath, "the tag signing")
+	}
+	tagErr := tagStep("tag", tagStepLabel(cfg), func() error {
 		name, skipped, terr := resolveTagName(repo, cfg)
 		if skipped {
 			ui.Warn("OMC_TAG %q is not strict semver (vMAJOR.MINOR.PATCH); falling back to auto-bump", cfg.Tag)
@@ -242,23 +273,29 @@ func run() int {
 		}
 		_, terr = gitops.CreateTag(repo, hash, tagName, tagSubject, id)
 		return terr
-	}); err != nil {
+	})
+	if tagErr != nil {
 		ui.EndGroup()
-		ui.Warn("tag: failed to tag %s: %v", tagName, err)
+		ui.EndGroup()
+		ui.Warn("tag: failed to tag %s: %v", tagName, tagErr)
 		return 0
 	}
-
 	ui.TagResult(tagName, hash.String()[:7], signer != nil)
 
-	// 9. Optional push: when OMC_PUSH_KEY_PATH is set and the key file is
+	// 8. Optional push: when OMC_PUSH_KEY_PATH is set and the key file is
 	// readable, push the new commit and the new tag to the default remote
 	// ("git push; git push --tags"). All in-process via go-git. Failures
 	// degrade: the commit and tag are never rolled back over a push
 	// problem, matching the "always degrade, never block" contract.
 	if cfg.PushKeyPath != "" {
+		skPush := sign.IsSecurityKeyPath(cfg.PushKeyPath)
+		ui.BeginGroup("🚀 push", pushLines)
 		pushStep := ui.Step
-		if sign.IsSecurityKeyPath(cfg.PushKeyPath) {
-			pushStep = ui.StepTouchPush
+		if skPush {
+			ui.SecurityKeyTouchNotice(cfg.PushKeyPath, "the push")
+			pushStep = func(step, msg string, fn func() error) error {
+				return ui.StepTouchPush(cfg.PushKeyPath, "the push", step, msg, fn)
+			}
 		}
 		if err := pushStep("push", "pushing commit and tags to remote", func() error {
 			_, err := gitops.PushToRemote(repo, cfg.PushKeyPath)
@@ -266,10 +303,30 @@ func run() int {
 		}); err != nil {
 			ui.Warn("push failed (%v); commit and tag left local", err)
 		}
+		ui.EndGroup() // push phase (closes the still-open reserve-slot group)
 	}
-	ui.EndGroup()
+	ui.EndGroup() // committing & publishing
 
 	return 0
+}
+
+// commitRoutine runs the commit step + the structured result for the
+// resolved message and signer.
+func commitRoutine(stepFn func(step, msg string, fn func() error) error, repo *git.Repository, wt *git.Worktree, msg gitops.CommitMessage, signer *sign.Signer, lbl string) (plumbing.Hash, error) {
+	var hash plumbing.Hash
+	err := stepFn("commit", lbl, func() error {
+		if signer != nil {
+			h, err := gitops.SignedCommit(repo, wt, msg, func(payload []byte) ([]byte, error) {
+				return signer.Sign(payload)
+			})
+			hash = h
+			return err
+		}
+		h, err := gitops.Commit(repo, wt, msg)
+		hash = h
+		return err
+	})
+	return hash, err
 }
 
 // configReport derives the startup diagnostic summary shown right after the
@@ -331,7 +388,9 @@ func pushNothing(ui *output.UI, repo *git.Repository, cfg config.Config) {
 	}
 	pushStep := ui.Step
 	if sign.IsSecurityKeyPath(cfg.PushKeyPath) {
-		pushStep = ui.StepTouchPush
+		pushStep = func(step, msg string, fn func() error) error {
+			return ui.StepTouchPush(cfg.PushKeyPath, "the push", step, msg, fn)
+		}
 	}
 	var res gitops.PushResult
 	err := pushStep("push", "pushing commit and tags to remote", func() error {

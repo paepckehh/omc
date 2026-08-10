@@ -170,7 +170,12 @@ built on [charmbracelet/bubbles] + [lipgloss]: every line is a structured log
 record of the form `<HH:MM:SS> <LEVEL> omc [<step>] <message> [key=value ...]`,
 with animated spinners per pipeline step, a gradient progress bar for the
 two-stage LLM generation, color-coded levels (OK / INFO / WARN / FAIL), and
-an animated touch countdown when a FIDO2 security key is used.
+an animated touch countdown when a FIDO2 security key is used. Related steps
+are gathered into nested log groups — `📂 preparing repository`,
+`💬 message generation`, `🔑 signing key`, and `📦 committing & publishing`
+(the latter with `📝 commit` / `🏷️ tag` / `🚀 push` sub-groups) — each line
+prefixed with a tree connector (`┌─` first, `├─` middle, `└─` last, one per
+open level, like `git log --graph`) so the whole run reads as one tree.
 
 The blocks below are real captured output (no Ollama running, so the message
 falls back to `update`). Diagnostics and progress go to stderr; the final
@@ -211,24 +216,34 @@ $ omc
 
 With `OMC_SIGN_KEY_PATH` pointing at an `id_ed25519_sk` handle, omc signs
 through the ssh-agent. On a TTY a live countdown animates while the signature
-waits for the device touch:
+waits for the device touch, and the moment the operation returns the
+countdown is replaced by a direct "touch confirmed, thank you" line plus a
+structured record naming what can now proceed:
 
 ```console
 $ ssh-add ~/.ssh/id_ed25519_sk
 $ export OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519_sk
 $ omc
 ...
-14:22:09 ⚠️ WARN omc warning: ssh key ~/.ssh/id_ed25519_sk is a smartcard security key; signing via the ssh-agent
-14:22:09 ℹ️ INFO omc ✍️ sign signing commit with ssh-agent security key key=~/.ssh/id_ed25519_sk mode=smartcard algo=sk-ssh-ed25519@openssh.com
-14:22:09 ℹ️ INFO omc 🔐 touch security key detected: touch your smartcard/yubikey when it blinks to authorise the commit signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the commit signing
+  🔑 signing key
+14:22:09 ┌─ ⚠️ WARN omc warning: ssh key ~/.ssh/id_ed25519_sk is a smartcard security key; signing via the ssh-agent
+14:22:09 ├─ ℹ️ INFO omc ✍️ sign signing commit with ssh-agent security key key=~/.ssh/id_ed25519_sk mode=smartcard algo=sk-ssh-ed25519@openssh.com
+  📦 committing & publishing
+┌─   📝 commit
+14:22:09 ├─ ┌─ ℹ️ INFO omc 🔐 touch security key detected: touch your smartcard/yubikey when it blinks to authorise the commit signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the commit signing
 🔑 TOUCH YOUR SECURITY KEY  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:28
 🔑 TOUCH YOUR SECURITY KEY  ▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:21
-14:22:14 ✅ OK omc 📝 commit done
-14:22:14 ℹ️ INFO omc 🔐 touch security key detected: touch your smartcard/yubikey when it blinks to authorise the tag signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the tag signing
+💛 touch confirmed, thank you!
+14:22:14 ├─ └─ ✅ OK omc 🔐 touch touch confirmed, thank you now=proceeding with the commit signing key=~/.ssh/id_ed25519_sk
+14:22:14 ├─ ┌─ ✅ OK omc 📝 commit done
+14:22:14 ├─ └─ ✅ OK omc 📝 commit committed hash=5c91e2a signed=true
+├─   🏷️ tag
+14:22:14 ├─ ┌─ ℹ️ INFO omc 🔐 touch security key detected: touch your smartcard/yubikey when it blinks to authorise the tag signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the tag signing
 🔑 TOUCH YOUR SECURITY KEY  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:29
-14:22:18 ✅ OK omc 🏷️ tag done
-14:22:18 ✅ OK omc 📝 commit committed hash=5c91e2a signed=true
-14:22:18 ✅ OK omc 🏷️ tag tagged tag=v0.0.2 hash=5c91e2a signed=true
+💛 touch confirmed, thank you!
+14:22:18 ├─ └─ ✅ OK omc 🔐 touch touch confirmed, thank you now=proceeding with the tag signing key=~/.ssh/id_ed25519_sk
+14:22:18 ├─ ┌─ ✅ OK omc 🏷️ tag done
+14:22:18 └─ └─ ✅ OK omc 🏷️ tag tagged tag=v0.0.2 hash=5c91e2a signed=true
 ```
 
 When the agent has no matching identity, omc degrades — never blocks:
@@ -324,7 +339,7 @@ Every field is a separate, greppable token — `tag=v0.3.9`, `hash=9d3f2ab`,
 without ambiguous whitespace. The commit and tag results go to stdout; all
 diagnostics and progress go to stderr. When a FIDO2 security key is used on a
 non-TTY, the animated countdown is suppressed and only the structured `touch`
-notice line is emitted, so CI logs stay greppable.
+notice and `touch confirmed` records are emitted, so CI logs stay greppable.
 
 No arguments were typed. No `git` binary was spawned. No prompts were answered.
 Everything that matters came from the environment.
@@ -631,6 +646,8 @@ $ omc
 14:26:10 ✅ OK omc 🏷️ tag tagged tag=v1.0.2 hash=5c91e2a signed=true
 14:26:10 ℹ️ INFO omc 🔐 touch security key detected: touch your smartcard/yubikey when it blinks to authorise the push key=~/.ssh/id_ed25519_sk mode=smartcard action=the push
 🔑 TOUCH YOUR SECURITY KEY  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:27
+💛 touch confirmed, thank you!
+14:26:15 ✅ OK omc 🔐 touch touch confirmed, thank you now=proceeding with the push key=~/.ssh/id_ed25519_sk
 14:26:15 ✅ OK omc 🚀 push done
 14:26:15 ✅ OK omc 🚀 push pushed remote=origin branch=main tags=true
 ```

@@ -237,14 +237,21 @@ PKCS#11, no `ssh-agent` binary, no CGO:
   is a fresh user-presence check, so the notice is emitted once per step
   that needs a touch (commit and tag are separate touches).
 - **Touch countdown** — on a TTY, each smartcard-bound step additionally
-  runs an animated, rewriting countdown (`output.UI.stepTouch` via
-  `StepTouchCommit` / `StepTouchTag` / `StepTouchPush`) while the blocking
-  operation waits for the device: a bold `🔑 TOUCH YOUR SECURITY KEY`
-  prompt, a shrinking progress bar, and an `M:SS` timer starting at 30s.
-  The countdown runs concurrently with the signature/push call and stops
-  the moment the operation returns, so the urgency of the pending touch is
-  unmistakable. On a non-TTY it degrades to the ordinary structured
-  `INFO`/`OK`/`FAIL` step records so captured logs stay greppable.
+  runs an animated, rewriting countdown (`output.UI.TouchStart`, stopped by
+  `output.UI.TouchStop`, and wrapped by `StepTouchCommit` /
+  `StepTouchTag` / `StepTouchPush`) while the blocking operation waits for
+  the device: a bold `🔑 TOUCH YOUR SECURITY KEY` prompt, a shrinking
+  progress bar, and an `M:SS` timer starting at 30s. The countdown runs
+  concurrently with the signature/push call and stops the moment the
+  operation returns, so the urgency of the pending touch is unmistakable.
+  **Touch confirmed** — as soon as the touched operation returns, the
+  countdown line is replaced by a direct `💛 touch confirmed, thank you!`
+  line (`output.UI.TouchConfirmed`) on stderr plus a structured
+  `OK omc touch touch confirmed, thank you now=proceeding with ... key=...`
+  record naming exactly which action can now proceed. On a non-TTY the
+  countdown degrades to the ordinary structured `INFO`/`OK`/`FAIL` step
+  records (plus the `touch confirmed` record) so captured logs stay
+  greppable.
 - **Limitations** — resident/discoverable or verify-required (-O
   verify-required) keys cannot be *enforced* by omc; they behave like
   ordinary sk keys, with whatever user verification the device and agent
@@ -329,7 +336,10 @@ $ omc 2>&1 | cat
 
 On a TTY the structured `touch` notice is followed by an animated countdown
 while the signature waits for the device touch (commit and tag are separate
-touches):
+touches). The moment the operation returns, the countdown line is replaced by
+a direct "touch confirmed, thank you" confirmation plus a structured OK
+record naming exactly what can now proceed (the touch for the commit signing
+unlocks the commit; a fresh touch for the tag signing unlocks the tag):
 
 ```console
 $ ssh-add ~/.ssh/id_ed25519_sk
@@ -337,18 +347,30 @@ $ export OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519_sk
 $ omc
 ...
 14:22:09 WARN omc warning: ssh key ~/.ssh/id_ed25519_sk is a smartcard security key; signing via the ssh-agent
-14:22:09 INFO omc sign signing commit with ssh-agent security key key=~/.ssh/id_ed25519_sk mode=smartcard algo=sk-ssh-ed25519@openssh.com
-14:22:09 INFO omc touch security key detected: touch your smartcard/yubikey when it blinks to authorise the commit signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the commit signing
+  🔑 signing key
+14:22:09 ┌─ WARN omc warning: ssh key ~/.ssh/id_ed25519_sk is a smartcard security key; signing via the ssh-agent
+14:22:09 ├─ INFO omc sign signing commit with ssh-agent security key key=~/.ssh/id_ed25519_sk mode=smartcard algo=sk-ssh-ed25519@openssh.com
+14:22:09 ├─ INFO omc touch security key detected: touch your smartcard/yubikey when it blinks to authorise the commit signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the commit signing
+  📦 committing & publishing
+┌─   📝 commit
+14:22:09 ├─ ┌─ INFO omc touch security key detected: touch your smartcard/yubikey when it blinks to authorise the commit signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the commit signing
 🔑 TOUCH YOUR SECURITY KEY  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:28
 🔑 TOUCH YOUR SECURITY KEY  ▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:21
-14:22:14 OK omc commit done
-14:22:14 INFO omc touch security key detected: touch your smartcard/yubikey when it blinks to authorise the tag signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the tag signing
+💛 touch confirmed, thank you!
+14:22:14 ├─ └─ OK omc touch touch confirmed, thank you now=proceeding with the commit signing key=~/.ssh/id_ed25519_sk
+14:22:14 ├─ ┌─ OK omc commit done
+14:22:14 ├─ └─ OK omc commit committed hash=5c91e2a signed=true
+├─   🏷️ tag
+14:22:14 ├─ ┌─ INFO omc touch security key detected: touch your smartcard/yubikey when it blinks to authorise the tag signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the tag signing
 🔑 TOUCH YOUR SECURITY KEY  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:29
-14:22:18 OK omc tag done
-14:22:18 OK omc commit committed hash=5c91e2a signed=true
-14:22:18 OK omc tag tagged tag=v0.0.2 hash=5c91e2a signed=true
+💛 touch confirmed, thank you!
+14:22:18 ├─ └─ OK omc touch touch confirmed, thank you now=proceeding with the tag signing key=~/.ssh/id_ed25519_sk
+14:22:18 ├─ ┌─ OK omc tag done
+14:22:18 └─ └─ OK omc tag tagged tag=v0.0.2 hash=5c91e2a signed=true
 ```
 
+Each smartcard-bound step (commit signing, tag signing, the push) is a fresh
+user-presence check, so there is one countdown + one confirmation per step.
 When the agent has no matching identity, omc degrades — never blocks:
 
 ```console

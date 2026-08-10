@@ -20,12 +20,13 @@
 // steps are gathered into logical log groups (BeginGroup / EndGroup): a
 // colored group header is printed and every record inside the group is
 // prefixed with a tree connector (┌─ first, ├─ middle, └─ last) tying the
-// steps together, so the user can see at a glance which records belong to
-// "preparing repository" vs "committing & publishing". The resolved commit
-// message is shown inside a rounded-border frame with a light background
-// (renderFrame) so it stands out from the surrounding log lines. Diagnostics
-// and the live spinner go to stderr; the final commit and tag results go to
-// stdout, preserving the Unix convention that stdout carries program output.
+// steps together, and groups may nest (see BeginGroup) so the whole run
+// forms one readable tree — e.g. "preparing repository" → "committing &
+// publishing" → "signing with security key". The resolved commit message is
+// shown inside a rounded-border frame with a light background (renderFrame)
+// so it stands out from the surrounding log lines. Diagnostics and the live
+// spinner go to stderr; the final commit and tag results go to stdout,
+// preserving the Unix convention that stdout carries program output.
 //
 // When stderr is not a terminal (piped output, captured tests, CI logs) the
 // colored rendering, tree grouping, and frame are all suppressed and omc
@@ -121,19 +122,35 @@ type UI struct {
 	animCtx  chan struct{}
 	animStep string
 	touch    *touchCountdown
-
-	// group holds the state of the active logical log group (the colored
-	// tree that ties related pipeline steps together). When active is true
-	// each structured line emitted on a TTY is prefixed with a tree
-	// connector (├─ or └─) and a group header line has already been
-	// rendered. BeginGroup opens a group; EndGroup closes it. Groups are
-	// a no-op outside a TTY so captured logs keep the flat, greppable form.
-	group struct {
-		active    bool
-		title     string
-		remaining int
-		total     int
+	// touchInfo holds the identity of the smartcard-bound operation whose
+	// countdown is currently shown (see TouchStart). It is cleared when the
+	// countdown stops and is used to render the "touch confirmed" notice so
+	// the confirmation names the same action and key path the countdown was
+	// shown for.
+	touchInfo struct {
+		keyPath string
+		action  string
 	}
+
+	// groups holds the stack of active logical log groups (the colored
+	// trees that tie related pipeline steps together; see BeginGroup).
+	// When the stack is non-empty each structured line emitted on a TTY
+	// is prefixed with a tree connector (├─ or └─) that reflects every
+	// open group, and each group's header has already been rendered.
+	// BeginGroup pushes; EndGroup pops. Groups are a no-op outside a TTY
+	// so captured logs keep the flat, greppable form.
+	groups []group
+}
+
+// group is a single level of the nested log-group tree (see UI.groups).
+// title is the colored header text rendered when the group opened;
+// remaining counts the structured lines still expected inside the group
+// (the connector for the last line is └─, the others ├─); when remaining
+// reaches zero the group closes itself.
+type group struct {
+	title     string
+	remaining int
+	total     int
 }
 
 type styles struct {
@@ -237,32 +254,58 @@ func (u *UI) IsTTY() bool { return u.tty }
 // printed and subsequent structured records are prefixed with a tree
 // connector (├─ / └─) tying them under that header. lineCount is the number
 // of structured lines that will be emitted inside the group; the connector
-// for the last line is └─, the others ├─. Off a TTY BeginGroup is a no-op so
-// captured logs keep their flat, greppable form.
+// for the last line is └─, the others ├─. Groups may nest: opening a group
+// while another is active renders the new header indented under the parent's
+// tree, and every line is prefixed with one connector per open depth (so a
+// record emitted inside a nested group carries a "├─ ├─ ..." prefix that
+// mirrors its position in the overall tree). Off a TTY BeginGroup is a no-op
+// so captured logs keep their flat, greppable form.
 func (u *UI) BeginGroup(title string, lineCount int) {
 	if !u.tty || lineCount <= 0 {
 		return
 	}
-	u.group.active = true
-	u.group.title = title
-	u.group.remaining = lineCount
-	u.group.total = lineCount
-	fmt.Fprintln(u.Err, "  "+u.styles.step.Render(title))
+	g := group{
+		title:     title,
+		remaining: lineCount,
+		total:     lineCount,
+	}
+	u.groups = append(u.groups, g)
+	u.renderGroupHeader()
 }
 
-// EndGroup closes the active log group. On a TTY it prints a blank line as a
-// visual separator between groups; off a TTY it is a no-op. A group is also
-// auto-closed once its last line is emitted, so EndGroup is only required
-// when you want to end a group early or insert a separator before ungrouped
-// output.
+// renderGroupHeader prints the colored header of the group just pushed,
+// prefixed with the parent tree connectors so nested group headers line up
+// like the records that follow them.
+func (u *UI) renderGroupHeader() {
+	indent := ""
+	if n := len(u.groups); n > 1 {
+		var b strings.Builder
+		for i := 0; i < n-1; i++ {
+			b.WriteString(u.groupTree(u.groups[i]))
+			b.WriteByte(' ')
+		}
+		indent = b.String()
+	}
+	top := u.groups[len(u.groups)-1]
+	line := indent + "  " + u.styles.step.Render(top.title)
+	fmt.Fprintln(u.Err, line)
+}
+
+// EndGroup closes the innermost active log group. On a TTY it prints a blank
+// line as a visual separator when the whole tree closes (so nested groups
+// read as contiguous subtrees); off a TTY it is a no-op. A group whose line
+// budget is exhausted is auto-closed by emit (see emit); EndGroup is for
+// groups closed early or for the outer group when you want the separator.
 func (u *UI) EndGroup() {
 	if !u.tty {
 		return
 	}
-	wasActive := u.group.active
-	u.group.active = false
-	u.group.remaining = 0
-	if wasActive {
+	popped := false
+	if n := len(u.groups); n > 0 {
+		u.groups = u.groups[:n-1]
+		popped = true
+	}
+	if popped && len(u.groups) == 0 {
 		fmt.Fprintln(u.Err)
 	}
 }
@@ -404,11 +447,27 @@ func (u *UI) emit(w io.Writer, level, step, msg string, fields ...Field) {
 		fmt.Fprint(w, b.String())
 		return
 	}
-	if u.group.active {
+	if u.inGroup() {
+		// Render with the pre-consumption counters (remaining includes the
+		// current line, so a group's first line renders ┌─ and its last
+		// └─), then consume one line from every open group and auto-close
+		// groups whose line budget is exhausted. Popping from the top
+		// keeps the remaining stack consistent with the nesting; when the
+		// pops empty the whole tree a separator blank is printed so
+		// groups read as contiguous subtrees.
 		fmt.Fprintln(w, u.renderGroupedLine(ts, level, step, msg, fieldStr))
-		u.group.remaining--
-		if u.group.remaining <= 0 {
-			u.group.active = false
+		for i := 0; i < len(u.groups); i++ {
+			if u.groups[i].remaining > 0 {
+				u.groups[i].remaining--
+			}
+		}
+		closed := false
+		for len(u.groups) > 0 && u.groups[len(u.groups)-1].remaining <= 0 {
+			u.groups = u.groups[:len(u.groups)-1]
+			closed = true
+		}
+		if closed && len(u.groups) == 0 {
+			fmt.Fprintln(u.Err)
 		}
 		return
 	}
@@ -428,16 +487,21 @@ func (u *UI) emit(w io.Writer, level, step, msg string, fields ...Field) {
 	fmt.Fprintln(w, strings.Join(parts, " "))
 }
 
-// renderGroupedTree returns the colored tree connector that ties the
-// current line to its group: ┌─ for the first line of a group, ├─ for
-// middle lines, └─ for the last line. A single-line group renders └─
-// (the line is both first and last).
-func (u *UI) renderGroupedTree() string {
-	first := u.group.remaining == u.group.total
-	last := u.group.remaining == 1
+// inGroup reports whether at least one log group is currently open.
+func (u *UI) inGroup() bool { return len(u.groups) > 0 }
+
+// groupTree returns the colored tree connector for a single open group:
+// ┌─ for the first line emitted inside the group, ├─ for middle lines, └─
+// for the last line. A single-line group renders └─ (the line is both
+// first and last). The connector is derived from the group's remaining
+// counter, so it reflects how many lines are still expected inside the
+// group.
+func (u *UI) groupTree(g group) string {
+	first := g.remaining == g.total
+	last := g.remaining == 1
 	var s string
 	switch {
-	case u.group.total == 1:
+	case g.total == 1:
 		s = "└─"
 	case first:
 		s = "┌─"
@@ -447,6 +511,22 @@ func (u *UI) renderGroupedTree() string {
 		s = "├─"
 	}
 	return u.styles.tree.Render(s)
+}
+
+// renderGroupedTree returns the full colored "connector prefix" for the
+// current line: one connector per open group, joined by a space, reflecting
+// the line's position in every open tree level. A record emitted inside a
+// nested group therefore carries a "├─ ├─" style prefix that mirrors its
+// depth, like git log --graph.
+func (u *UI) renderGroupedTree() string {
+	var b strings.Builder
+	for i := range u.groups {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(u.groupTree(u.groups[i]))
+	}
+	return b.String()
 }
 
 // renderGroupedLine renders a single structured log record prefixed with the
@@ -562,12 +642,12 @@ func (u *UI) startSpinner(step, msg string) {
 	brand := u.styles.brand.Render(Brand)
 	stepLbl := u.styles.step.Render(stepIcon(step))
 	// When the spinner is animating inside an active log group, render the
-	// tree connector between the timestamp and the level so the spinner
-	// line stays visually aligned with the grouped completion line that
-	// will replace it.
+	// same connector prefix as the structured line that will replace it so
+	// the spinner line stays visually aligned with its grouped completion
+	// record.
 	tree := ""
-	if u.group.active {
-		tree = " " + u.styles.tree.Render("├─")
+	if u.inGroup() {
+		tree = " " + u.renderGroupedTree()
 	}
 	fps := time.Second / animFPS
 
@@ -897,25 +977,21 @@ func (c *touchCountdown) fmtSeconds() string {
 	return fmt.Sprintf("%d:%02d", s/60, s%60)
 }
 
-// stepTouch runs fn while showing either the animated touch countdown (on a
-// TTY) or the structured step records (off a TTY). It is the smartcard-aware
-// counterpart to Step: where Step shows a generic scramble spinner, stepTouch
-// shows a blinking-touch countdown so the user knows an action is required
-// right now. The structured touch notice (SecurityKeyTouchNotice) is emitted
-// by the caller beforehand; stepTouch only owns the animation and the
-// step-completion record.
-func (u *UI) stepTouch(step, msg string, fn func() error) error {
+// TouchStart begins the animated touch countdown for a smartcard-bound
+// operation (commit/tag signing, SSH push) and records which action/key the
+// countdown belongs to. Pair it with TouchStop once the blocking operation
+// returns; the running ticker stops there. On a non-TTY the caller emits the
+// structured records instead and this is a no-op.
+func (u *UI) TouchStart(keyPath, action string) {
+	// Record the identity of the operation first so TouchConfirmed can
+	// name it, on TTY and off (the countdown itself only runs on a TTY).
+	u.mu.Lock()
+	u.touchInfo.keyPath = keyPath
+	u.touchInfo.action = action
+	u.mu.Unlock()
 	if !u.tty {
-		u.emit(u.Err, "INFO", step, msg)
-		err := fn()
-		if err != nil {
-			u.emit(u.Err, "FAIL", step, err.Error(), F("err", err.Error()))
-			return err
-		}
-		u.emit(u.Err, "OK", step, "done")
-		return nil
+		return
 	}
-
 	cd := newTouchCountdown()
 	u.mu.Lock()
 	u.touch = cd
@@ -945,22 +1021,91 @@ func (u *UI) stepTouch(step, msg string, fn func() error) error {
 			}
 		}
 	}(cd.done)
+}
 
-	err := fn()
-
-	u.mu.Lock()
-	if !cd.over {
-		cd.over = true
-		close(cd.done)
+// TouchStop stops the touch countdown started by TouchStart and clears its
+// line. The touchInfo is left in place so TouchConfirmed can render the
+// confirmation naming the just-completed operation; it is cleared by the
+// start of the next countdown.
+func (u *UI) TouchStop() {
+	if !u.tty {
+		return
 	}
-	u.touch = nil
+	u.mu.Lock()
+	if u.touch != nil {
+		if !u.touch.over {
+			u.touch.over = true
+			close(u.touch.done)
+		}
+		u.touch = nil
+	}
 	fmt.Fprint(u.Err, "\r\033[K")
 	u.mu.Unlock()
+}
+
+// TouchConfirmed reports that the smartcard touch for the operation shown by
+// the last TouchStart/TouchStop pair was detected (the blocking call
+// returned successfully). On a TTY it clears the countdown line and writes a
+// direct, unmissable "touch confirmed, thank you" line to stderr, followed
+// by the structured OK record with the details of what can now proceed. Off
+// a TTY only the structured record is emitted so captured logs stay
+// greppable.
+func (u *UI) TouchConfirmed() {
+	keyPath := u.touchInfo.keyPath
+	action := u.touchInfo.action
+	u.touchInfo.keyPath = ""
+	u.touchInfo.action = ""
+
+	if u.tty {
+		confirm := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(palette.success).
+			Render("💛 touch confirmed, thank you!")
+		fmt.Fprintf(u.Err, "\r\033[K%s\n", confirm)
+	}
+	if action != "" {
+		u.emit(u.Err, "OK", "touch", "touch confirmed, thank you",
+			F("now", "proceeding with "+action),
+			F("key", keyPath),
+		)
+		return
+	}
+	u.emit(u.Err, "OK", "touch", "touch confirmed, thank you",
+		F("now", "proceeding"),
+	)
+}
+
+// stepTouchInfo runs the smartcard-aware counterpart to Step: where Step
+// shows a generic scramble spinner, stepTouchInfo shows a blinking-touch
+// countdown (TTY) or the structured step records (non-TTY) so the user knows
+// an action is required right now. The structured touch notice
+// (SecurityKeyTouchNotice) is emitted by the caller beforehand; stepTouchInfo
+// owns the animation, the step-completion record, and the "touch confirmed"
+// notice. keyPath and action name the smartcard operation whose touch the
+// countdown waits for.
+func (u *UI) stepTouchInfo(step, msg, keyPath, action string, fn func() error) error {
+	if !u.tty {
+		u.emit(u.Err, "INFO", step, msg)
+		err := fn()
+		if err != nil {
+			u.emit(u.Err, "FAIL", step, err.Error(), F("err", err.Error()))
+			return err
+		}
+		u.TouchStart(keyPath, action)
+		u.TouchConfirmed()
+		u.emit(u.Err, "OK", step, "done")
+		return nil
+	}
+
+	u.TouchStart(keyPath, action)
+	err := fn()
+	u.TouchStop()
 
 	if err != nil {
 		u.emit(u.Err, "FAIL", step, err.Error(), F("err", err.Error()))
 		return err
 	}
+	u.TouchConfirmed()
 	u.emit(u.Err, "OK", step, "done")
 	return nil
 }
@@ -968,21 +1113,23 @@ func (u *UI) stepTouch(step, msg string, fn func() error) error {
 // StepTouchCommit runs the commit-signing step fn while showing the animated
 // touch countdown (TTY) or the structured step records (non-TTY). Use it for
 // the smartcard commit-signing path so the user is prompted to touch the
-// device right now.
-func (u *UI) StepTouchCommit(step, msg string, fn func() error) error {
-	return u.stepTouch(step, msg, fn)
+// device right now. keyPath and action name the operation so the touch
+// confirmation is specific.
+func (u *UI) StepTouchCommit(keyPath, action, step, msg string, fn func() error) error {
+	return u.stepTouchInfo(step, msg, keyPath, action, fn)
 }
 
 // StepTouchTag runs the tag-signing step fn with the touch countdown. Use it
-// for the smartcard tag-signing path.
-func (u *UI) StepTouchTag(step, msg string, fn func() error) error {
-	return u.stepTouch(step, msg, fn)
+// for the smartcard tag-signing path. keyPath and action name the operation.
+func (u *UI) StepTouchTag(keyPath, action, step, msg string, fn func() error) error {
+	return u.stepTouchInfo(step, msg, keyPath, action, fn)
 }
 
 // StepTouchPush runs the SSH push step fn with the touch countdown when the
 // push key is a security-key handle. Use it for the smartcard push path.
-func (u *UI) StepTouchPush(step, msg string, fn func() error) error {
-	return u.stepTouch(step, msg, fn)
+// keyPath and action name the operation.
+func (u *UI) StepTouchPush(keyPath, action, step, msg string, fn func() error) error {
+	return u.stepTouchInfo(step, msg, keyPath, action, fn)
 }
 
 // PushResult renders the post-push notice to stdout: the remote that was

@@ -265,7 +265,7 @@ func TestSecurityKeyTouchNoticeNonTTY(t *testing.T) {
 func TestStepTouchCommitNonTTY(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		ui, _, err := newTestUI()
-		if eerr := ui.StepTouchCommit("commit", "committing as Test <t@e> (signed)", func() error { return nil }); eerr != nil {
+		if eerr := ui.StepTouchCommit("/k/id_ed25519_sk", "the commit signing", "commit", "committing as Test <t@e> (signed)", func() error { return nil }); eerr != nil {
 			t.Fatalf("StepTouchCommit returned error: %v", eerr)
 		}
 		got := err.String()
@@ -275,11 +275,14 @@ func TestStepTouchCommitNonTTY(t *testing.T) {
 		if !strings.Contains(got, "OK") || !strings.Contains(got, "done") {
 			t.Errorf("missing done line, got: %q", got)
 		}
+		if !strings.Contains(got, "touch confirmed, thank you") {
+			t.Errorf("missing touch-confirmed record, got: %q", got)
+		}
 	})
 	t.Run("failure", func(t *testing.T) {
 		ui, _, err := newTestUI()
 		want := errors.New("agent unreachable")
-		if eerr := ui.StepTouchCommit("commit", "committing", func() error { return want }); eerr == nil {
+		if eerr := ui.StepTouchCommit("/k/id_ed25519_sk", "the commit signing", "commit", "committing", func() error { return want }); eerr == nil {
 			t.Fatal("StepTouchCommit returned nil for failing fn")
 		}
 		got := err.String()
@@ -291,12 +294,15 @@ func TestStepTouchCommitNonTTY(t *testing.T) {
 
 func TestStepTouchPushNonTTY(t *testing.T) {
 	ui, _, err := newTestUI()
-	if eerr := ui.StepTouchPush("push", "pushing commit and tags to remote", func() error { return nil }); eerr != nil {
+	if eerr := ui.StepTouchPush("/k/id_ed25519_sk", "the push", "push", "pushing commit and tags to remote", func() error { return nil }); eerr != nil {
 		t.Fatalf("StepTouchPush returned error: %v", eerr)
 	}
 	got := err.String()
 	if !strings.Contains(got, "push") || !strings.Contains(got, "OK") {
 		t.Errorf("missing push step records, got: %q", got)
+	}
+	if !strings.Contains(got, "touch confirmed, thank you") {
+		t.Errorf("missing touch-confirmed record, got: %q", got)
 	}
 }
 
@@ -499,7 +505,7 @@ func TestBeginGroupNoOpOffTTY(t *testing.T) {
 	if err.Len() != 0 {
 		t.Errorf("BeginGroup/EndGroup wrote to stderr off a TTY, got: %q", err.String())
 	}
-	if ui.group.active {
+	if len(ui.groups) != 0 {
 		t.Error("group marked active off a TTY")
 	}
 }
@@ -507,7 +513,7 @@ func TestBeginGroupNoOpOffTTY(t *testing.T) {
 func TestBeginGroupNoOpForZeroLines(t *testing.T) {
 	ui, _, err := newTestTTYUI()
 	ui.BeginGroup("g", 0)
-	if ui.group.active {
+	if len(ui.groups) != 0 {
 		t.Error("group active for zero lines")
 	}
 	if err.Len() != 0 {
@@ -537,7 +543,7 @@ func TestGroupTreeConnectors(t *testing.T) {
 		t.Errorf("missing last-line └─ connector, got: %q", got)
 	}
 	// Group must auto-close after the configured line count.
-	if ui.group.active {
+	if len(ui.groups) != 0 {
 		t.Error("group still active after all lines emitted")
 	}
 }
@@ -546,7 +552,7 @@ func TestGroupTreeSingleLine(t *testing.T) {
 	ui, _, err := newTestTTYUI()
 	ui.BeginGroup("solo", 1)
 	ui.Info("only")
-	if ui.group.active {
+	if len(ui.groups) != 0 {
 		t.Error("group still active after its single line")
 	}
 	got := stripANSI(err.String())
@@ -560,8 +566,8 @@ func TestEndGroupClosesEarlyAndSeparates(t *testing.T) {
 	ui.BeginGroup("g", 5)
 	ui.Info("one")
 	ui.EndGroup()
-	if ui.group.active {
-		t.Error("EndGroup did not clear group.active")
+	if len(ui.groups) != 0 {
+		t.Error("EndGroup did not clear the group stack")
 	}
 	got := err.String()
 	// EndGroup prints a trailing blank separator line on a TTY.
@@ -581,8 +587,69 @@ func TestGroupAutoClosesAtLineCount(t *testing.T) {
 	if strings.Count(got, "└─") != 1 {
 		t.Errorf("expected exactly one └─ (grouped line only), got: %q", got)
 	}
-	if ui.group.active {
+	if len(ui.groups) != 0 {
 		t.Error("group not auto-closed after line count reached")
+	}
+}
+
+func TestNestedGroupsRenderDepthConnectors(t *testing.T) {
+	// A nested group's records must carry one connector per open level,
+	// and the deeply nested record must end with the innermost group's
+	// connector (└─ when it is the child's last line). The parent's budget
+	// covers every record in its subtree (child header lines do not
+	// consume it).
+	ui, _, err := newTestTTYUI()
+	ui.BeginGroup("parent", 4) // child-one + child-last + parent-last + one closing record
+	ui.BeginGroup("child", 2)
+	ui.Info("child-one")
+	ui.Info("child-last")
+	ui.Info("parent-last")
+	ui.Info("parent-close")
+	got := stripANSI(err.String())
+	// child-one: parent still has remaining>1 → parent ├─; child first → ┌─.
+	if !strings.Contains(got, "┌─ ┌─") {
+		t.Errorf("child-first line must use parent first + child first connectors, got: %q", got)
+	}
+	// child-last: parent still open (remaining>1) → parent ├─; child last → └─.
+	if !strings.Contains(got, "├─ └─") {
+		t.Errorf("child-last line must use parent middle + child last connectors, got: %q", got)
+	}
+	// parent-last: emitted after the child group closed, so only parent's
+	// connector remains, still └─ only on the parent's own last record.
+	if !strings.Contains(got, "└─") {
+		t.Errorf("parent close must carry the parent's └─ connector, got: %q", got)
+	}
+	if len(ui.groups) != 0 {
+		t.Error("groups not all closed after their budgets were consumed")
+	}
+}
+
+func TestNestedGroupHeaderIndent(t *testing.T) {
+	// Nested headers must be prefixed with the parent connector so the
+	// whole tree reads like git log --graph.
+	ui, _, err := newTestTTYUI()
+	ui.BeginGroup("parent", 2)
+	ui.BeginGroup("child", 1)
+	ui.Info("in")
+	ui.EndGroup() // child
+	got := stripANSI(err.String())
+	// The child header line must carry a parent connector (┌─) prefix.
+	if !strings.Contains(got, "child") || !strings.Contains(got, "parent") {
+		t.Errorf("nested header missing, got: %q", got)
+	}
+	if !strings.HasPrefix(stripANSI(err.String()), "  parent\n┌─   child") {
+		t.Errorf("child header must be prefixed with the parent's first-line connector, got: %q", got)
+	}
+}
+
+func TestTouchConfirmedTextOnTTY(t *testing.T) {
+	ui, _, err := newTestTTYUI()
+	ui.TouchStart("/k/id_ed25519_sk", "the commit signing")
+	ui.TouchStop()
+	ui.TouchConfirmed()
+	got := stripANSI(err.String())
+	if !strings.Contains(got, "touch confirmed, thank you") {
+		t.Errorf("TTY touch confirmation missing, got: %q", got)
 	}
 }
 
