@@ -72,6 +72,7 @@ func run() int {
 		repo *git.Repository
 		wt   *git.Worktree
 	)
+	ui.BeginGroup("📂 preparing repository", 3)
 	if err := ui.Step("open", "detecting repository", func() error {
 		r, w, err := gitops.Open()
 		if err != nil {
@@ -80,6 +81,7 @@ func run() int {
 		repo, wt = r, w
 		return nil
 	}); err != nil {
+		ui.EndGroup()
 		ui.Error(err)
 		return 1
 	}
@@ -88,6 +90,7 @@ func run() int {
 	if err := ui.Step("stage", "staging all changes", func() error {
 		return gitops.StageAll(wt)
 	}); err != nil {
+		ui.EndGroup()
 		ui.Error(err)
 		return 1
 	}
@@ -105,9 +108,11 @@ func run() int {
 		diffText, files = d, f
 		return nil
 	}); err != nil {
+		ui.EndGroup()
 		ui.Error(err)
 		return 1
 	}
+	ui.EndGroup()
 
 	// 3b. Nothing to commit: inform, still run the optional push (there
 	// may be nothing new on the branch but local tags could be ahead of
@@ -174,6 +179,17 @@ func run() int {
 	if skMode && signer != nil {
 		commitStep = ui.StepTouchCommit
 	}
+	// The commit, its semver tag, and the optional push form one logical
+	// "commit & publish" group: commit step + result, tag step + result,
+	// and (when configured) the push step. lineCount accounts for the
+	// optional push so the colored tree closes with └─ on the last line;
+	// when a push is configured we also reserve a slot for the degradation
+	// WARN emitted on push failure so it stays under the tree.
+	publishLines := 4
+	if cfg.PushKeyPath != "" {
+		publishLines += 2
+	}
+	ui.BeginGroup("📦 committing & publishing", publishLines)
 	commitErr := commitStep("commit", commitLabel(id, signer != nil), func() error {
 		if signer != nil {
 			h, err := gitops.SignedCommit(repo, wt, msg, func(payload []byte) ([]byte, error) {
@@ -187,6 +203,7 @@ func run() int {
 		return err
 	})
 	if commitErr != nil {
+		ui.EndGroup()
 		ui.Error(commitErr)
 		return 1
 	}
@@ -226,6 +243,7 @@ func run() int {
 		_, terr = gitops.CreateTag(repo, hash, tagName, tagSubject, id)
 		return terr
 	}); err != nil {
+		ui.EndGroup()
 		ui.Warn("tag: failed to tag %s: %v", tagName, err)
 		return 0
 	}
@@ -249,6 +267,7 @@ func run() int {
 			ui.Warn("push failed (%v); commit and tag left local", err)
 		}
 	}
+	ui.EndGroup()
 
 	return 0
 }

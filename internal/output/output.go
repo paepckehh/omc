@@ -16,13 +16,21 @@
 //
 // When stderr is a terminal the same records are rendered with color, icons,
 // aligned columns, and an animated scramble spinner (see anim.go) for
-// long-running steps such as the two-stage LLM generation. Diagnostics and
-// the live spinner go to stderr; the final commit and tag results go to
+// long-running steps such as the two-stage LLM generation. Related pipeline
+// steps are gathered into logical log groups (BeginGroup / EndGroup): a
+// colored group header is printed and every record inside the group is
+// prefixed with a tree connector (┌─ first, ├─ middle, └─ last) tying the
+// steps together, so the user can see at a glance which records belong to
+// "preparing repository" vs "committing & publishing". The resolved commit
+// message is shown inside a rounded-border frame with a light background
+// (renderFrame) so it stands out from the surrounding log lines. Diagnostics
+// and the live spinner go to stderr; the final commit and tag results go to
 // stdout, preserving the Unix convention that stdout carries program output.
 //
 // When stderr is not a terminal (piped output, captured tests, CI logs) the
-// colored rendering is suppressed and omc falls back to the plain
-// structured line format so the output stays greppable and deterministic.
+// colored rendering, tree grouping, and frame are all suppressed and omc
+// falls back to the plain structured line format so the output stays
+// greppable and deterministic.
 package output
 
 import (
@@ -42,39 +50,47 @@ const Brand = "omc"
 
 // palette holds the lipgloss colors used across the UI.
 var palette = struct {
-	brand     lipgloss.Color
-	subject   lipgloss.Color
-	success   lipgloss.Color
-	warn      lipgloss.Color
-	err       lipgloss.Color
-	muted     lipgloss.Color
-	accent    lipgloss.Color
-	detail    lipgloss.Color
-	hash      lipgloss.Color
-	signed    lipgloss.Color
-	timestamp lipgloss.Color
-	info      lipgloss.Color
-	step      lipgloss.Color
-	key       lipgloss.Color
-	val       lipgloss.Color
-	spinner   lipgloss.Color
+	brand       lipgloss.Color
+	subject     lipgloss.Color
+	success     lipgloss.Color
+	warn        lipgloss.Color
+	err         lipgloss.Color
+	muted       lipgloss.Color
+	accent      lipgloss.Color
+	detail      lipgloss.Color
+	hash        lipgloss.Color
+	signed      lipgloss.Color
+	timestamp   lipgloss.Color
+	info        lipgloss.Color
+	step        lipgloss.Color
+	key         lipgloss.Color
+	val         lipgloss.Color
+	spinner     lipgloss.Color
+	frameBg     lipgloss.Color
+	frameBorder lipgloss.Color
+	frameTitle  lipgloss.Color
+	tree        lipgloss.Color
 }{
-	brand:     lipgloss.Color("#7D56F4"),
-	subject:   lipgloss.Color("#EE6FF8"),
-	success:   lipgloss.Color("#3FB950"),
-	warn:      lipgloss.Color("#D29922"),
-	err:       lipgloss.Color("#F85149"),
-	muted:     lipgloss.Color("#6E7681"),
-	accent:    lipgloss.Color("#58A6FF"),
-	detail:    lipgloss.Color("#A371F7"),
-	hash:      lipgloss.Color("#79C0FF"),
-	signed:    lipgloss.Color("#56D364"),
-	timestamp: lipgloss.Color("#6E7681"),
-	info:      lipgloss.Color("#58A6FF"),
-	step:      lipgloss.Color("#A371F7"),
-	key:       lipgloss.Color("#6E7681"),
-	val:       lipgloss.Color("#C9D1D9"),
-	spinner:   lipgloss.Color("#EE6FF8"),
+	brand:       lipgloss.Color("#7D56F4"),
+	subject:     lipgloss.Color("#EE6FF8"),
+	success:     lipgloss.Color("#3FB950"),
+	warn:        lipgloss.Color("#D29922"),
+	err:         lipgloss.Color("#F85149"),
+	muted:       lipgloss.Color("#6E7681"),
+	accent:      lipgloss.Color("#58A6FF"),
+	detail:      lipgloss.Color("#A371F7"),
+	hash:        lipgloss.Color("#79C0FF"),
+	signed:      lipgloss.Color("#56D364"),
+	timestamp:   lipgloss.Color("#6E7681"),
+	info:        lipgloss.Color("#58A6FF"),
+	step:        lipgloss.Color("#A371F7"),
+	key:         lipgloss.Color("#6E7681"),
+	val:         lipgloss.Color("#C9D1D9"),
+	spinner:     lipgloss.Color("#EE6FF8"),
+	frameBg:     lipgloss.Color("#1C2128"),
+	frameBorder: lipgloss.Color("#7D56F4"),
+	frameTitle:  lipgloss.Color("#7D56F4"),
+	tree:        lipgloss.Color("#A371F7"),
 }
 
 // Field is a single structured key=value pair appended to a log line.
@@ -100,30 +116,49 @@ type UI struct {
 	animCtx  chan struct{}
 	animStep string
 	touch    *touchCountdown
+
+	// group holds the state of the active logical log group (the colored
+	// tree that ties related pipeline steps together). When active is true
+	// each structured line emitted on a TTY is prefixed with a tree
+	// connector (├─ or └─) and a group header line has already been
+	// rendered. BeginGroup opens a group; EndGroup closes it. Groups are
+	// a no-op outside a TTY so captured logs keep the flat, greppable form.
+	group struct {
+		active    bool
+		title     string
+		remaining int
+		total     int
+	}
 }
 
 type styles struct {
-	brand     lipgloss.Style
-	timestamp lipgloss.Style
-	levelOK   lipgloss.Style
-	levelInfo lipgloss.Style
-	levelWarn lipgloss.Style
-	levelFail lipgloss.Style
-	step      lipgloss.Style
-	msg       lipgloss.Style
-	key       lipgloss.Style
-	val       lipgloss.Style
-	ok        lipgloss.Style
-	warn      lipgloss.Style
-	fail      lipgloss.Style
-	muted     lipgloss.Style
-	subject   lipgloss.Style
-	body      lipgloss.Style
-	hash      lipgloss.Style
-	signed    lipgloss.Style
-	meta      lipgloss.Style
-	bullet    lipgloss.Style
-	fileItem  lipgloss.Style
+	brand        lipgloss.Style
+	timestamp    lipgloss.Style
+	levelOK      lipgloss.Style
+	levelInfo    lipgloss.Style
+	levelWarn    lipgloss.Style
+	levelFail    lipgloss.Style
+	step         lipgloss.Style
+	msg          lipgloss.Style
+	key          lipgloss.Style
+	val          lipgloss.Style
+	ok           lipgloss.Style
+	warn         lipgloss.Style
+	fail         lipgloss.Style
+	muted        lipgloss.Style
+	subject      lipgloss.Style
+	body         lipgloss.Style
+	hash         lipgloss.Style
+	signed       lipgloss.Style
+	meta         lipgloss.Style
+	bullet       lipgloss.Style
+	fileItem     lipgloss.Style
+	frameBox     lipgloss.Style
+	frameSubject lipgloss.Style
+	frameBody    lipgloss.Style
+	frameTitle   lipgloss.Style
+	frameMuted   lipgloss.Style
+	tree         lipgloss.Style
 }
 
 // New returns a UI writing to the passed streams. TTY detection is performed
@@ -167,11 +202,71 @@ func (u *UI) initStyles() {
 		meta:      base.Foreground(palette.muted),
 		bullet:    base.Foreground(palette.accent),
 		fileItem:  base.Foreground(palette.accent),
+		frameBox: base.
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(palette.frameBorder).
+			Background(palette.frameBg).
+			Padding(0, 1),
+		frameSubject: base.Bold(true).Foreground(palette.subject).Background(palette.frameBg),
+		frameBody:    base.Foreground(palette.detail).Background(palette.frameBg),
+		frameTitle:   base.Bold(true).Foreground(palette.frameTitle).Background(palette.frameBg),
+		frameMuted:   base.Foreground(palette.muted).Background(palette.frameBg),
+		tree:         base.Foreground(palette.tree),
 	}
 }
 
 // IsTTY reports whether the UI is rendering to an interactive terminal.
 func (u *UI) IsTTY() bool { return u.tty }
+
+// BeginGroup opens a logical log group. On a TTY a colored group header is
+// printed and subsequent structured records are prefixed with a tree
+// connector (├─ / └─) tying them under that header. lineCount is the number
+// of structured lines that will be emitted inside the group; the connector
+// for the last line is └─, the others ├─. Off a TTY BeginGroup is a no-op so
+// captured logs keep their flat, greppable form.
+func (u *UI) BeginGroup(title string, lineCount int) {
+	if !u.tty || lineCount <= 0 {
+		return
+	}
+	u.group.active = true
+	u.group.title = title
+	u.group.remaining = lineCount
+	u.group.total = lineCount
+	fmt.Fprintln(u.Err, "  "+u.styles.step.Render(title))
+}
+
+// EndGroup closes the active log group. On a TTY it prints a blank line as a
+// visual separator between groups; off a TTY it is a no-op. A group is also
+// auto-closed once its last line is emitted, so EndGroup is only required
+// when you want to end a group early or insert a separator before ungrouped
+// output.
+func (u *UI) EndGroup() {
+	if !u.tty {
+		return
+	}
+	wasActive := u.group.active
+	u.group.active = false
+	u.group.remaining = 0
+	if wasActive {
+		fmt.Fprintln(u.Err)
+	}
+}
+
+// renderFrame returns the commit message rendered inside a rounded-border
+// box on a light background, with a small "commit message" title sitting on
+// top of the box. Used by Summary on a TTY to make the generated/override
+// commit message stand out from the surrounding structured log lines.
+func (u *UI) renderFrame(subject, body string) string {
+	subj := u.styles.frameSubject.Render("💬 " + subject)
+	content := subj
+	if strings.TrimSpace(body) != "" {
+		content = lipgloss.JoinVertical(lipgloss.Left, content, "",
+			u.styles.frameBody.Render(body))
+	}
+	box := u.styles.frameBox.Render(content)
+	header := "  └ " + u.styles.frameTitle.Render("commit message")
+	return lipgloss.JoinVertical(lipgloss.Left, header, box)
+}
 
 // --- structured log line rendering -------------------------------------------
 
@@ -201,6 +296,11 @@ func (u *UI) renderFields(fields []Field) string {
 // fields are optional key=value pairs. The record always carries a leading
 // timestamp and the brand name so consumers can grep on "omc" regardless
 // of TTY mode.
+//
+// On a TTY, when a logical log group is active (see BeginGroup), the record
+// is prefixed with a colored tree connector (├─ for in-group lines, └─ for
+// the last line of the group) tying related steps together under the
+// group's header. Outside a group, or off a TTY, the flat form is emitted.
 func (u *UI) emit(w io.Writer, level, step, msg string, fields ...Field) {
 	ts := now()
 	fieldStr := u.renderFields(fields)
@@ -233,6 +333,14 @@ func (u *UI) emit(w io.Writer, level, step, msg string, fields ...Field) {
 		fmt.Fprint(w, b.String())
 		return
 	}
+	if u.group.active {
+		fmt.Fprintln(w, u.renderGroupedLine(ts, level, step, msg, fieldStr))
+		u.group.remaining--
+		if u.group.remaining <= 0 {
+			u.group.active = false
+		}
+		return
+	}
 	var parts []string
 	parts = append(parts,
 		u.styles.timestamp.Render(ts),
@@ -247,6 +355,49 @@ func (u *UI) emit(w io.Writer, level, step, msg string, fields ...Field) {
 		parts = append(parts, fieldStr)
 	}
 	fmt.Fprintln(w, strings.Join(parts, " "))
+}
+
+// renderGroupedTree returns the colored tree connector that ties the
+// current line to its group: ┌─ for the first line of a group, ├─ for
+// middle lines, └─ for the last line. A single-line group renders └─
+// (the line is both first and last).
+func (u *UI) renderGroupedTree() string {
+	first := u.group.remaining == u.group.total
+	last := u.group.remaining == 1
+	var s string
+	switch {
+	case u.group.total == 1:
+		s = "└─"
+	case first:
+		s = "┌─"
+	case last:
+		s = "└─"
+	default:
+		s = "├─"
+	}
+	return u.styles.tree.Render(s)
+}
+
+// renderGroupedLine renders a single structured log record prefixed with the
+// colored group tree connector. The line keeps the same components as the
+// flat TTY form (timestamp · level · brand · step · message · fields) so the
+// text tokens (OK / INFO / step name / etc.) stay greppable.
+func (u *UI) renderGroupedLine(ts, level, step, msg, fieldStr string) string {
+	var parts []string
+	parts = append(parts,
+		u.styles.timestamp.Render(ts),
+		u.renderGroupedTree(),
+		renderLevel(u.styles, level),
+		u.styles.brand.Render(Brand),
+	)
+	if step != "" {
+		parts = append(parts, u.styles.step.Render(stepIcon(step)))
+	}
+	parts = append(parts, u.styles.msg.Render(msg))
+	if fieldStr != "" {
+		parts = append(parts, fieldStr)
+	}
+	return strings.Join(parts, " ")
 }
 
 // renderLevel maps a level token to its styled rendering, decorated with
@@ -339,9 +490,17 @@ func (u *UI) startSpinner(step, msg string) {
 	level := u.styles.levelInfo.Render(StatePending + " ··")
 	brand := u.styles.brand.Render(Brand)
 	stepLbl := u.styles.step.Render(stepIcon(step))
+	// When the spinner is animating inside an active log group, render the
+	// tree connector between the timestamp and the level so the spinner
+	// line stays visually aligned with the grouped completion line that
+	// will replace it.
+	tree := ""
+	if u.group.active {
+		tree = " " + u.styles.tree.Render("├─")
+	}
 	fps := time.Second / animFPS
 
-	go func(stop <-chan struct{}, ts, level, brand, stepLbl string) {
+	go func(stop <-chan struct{}, ts, tree, level, brand, stepLbl string) {
 		tk := time.NewTicker(fps)
 		defer tk.Stop()
 		for {
@@ -356,12 +515,12 @@ func (u *UI) startSpinner(step, msg string) {
 				}
 				u.anim.tick()
 				frame := u.anim.render()
-				line := fmt.Sprintf("\r%s %s %s %s %s", ts, level, brand, stepLbl, frame)
+				line := fmt.Sprintf("\r%s%s %s %s %s %s", ts, tree, level, brand, stepLbl, frame)
 				fmt.Fprint(u.Err, line)
 				u.mu.Unlock()
 			}
 		}
-	}(u.animCtx, ts, level, brand, stepLbl)
+	}(u.animCtx, ts, tree, level, brand, stepLbl)
 }
 
 // updateSpinner changes the live label of the running spinner. Safe to call
@@ -514,7 +673,10 @@ func (u *UI) FileList(files []string) {
 }
 
 // Summary renders the resolved commit subject and (optional) LLM body to
-// stdout as a styled preview before the commit is created.
+// stdout as a styled preview before the commit is created. On a TTY the
+// message is placed inside a rounded-border frame with a light background
+// so the message the user is about to commit is unmissable; off a TTY the
+// flat "subject:" / "body:" structured form is kept for greppability.
 func (u *UI) Summary(subject, body string) {
 	if !u.tty {
 		u.emit(u.Out, "INFO", "msg", "subject: "+subject)
@@ -524,19 +686,7 @@ func (u *UI) Summary(subject, body string) {
 		}
 		return
 	}
-	head := fmt.Sprintf("%s %s %s %s %s",
-		u.styles.timestamp.Render(now()),
-		u.styles.levelInfo.Render("ℹ️ INFO"),
-		u.styles.brand.Render(Brand),
-		u.styles.step.Render(stepIcon("msg")),
-		u.styles.muted.Render("commit message:"),
-	)
-	subj := u.styles.subject.Render(subject)
-	block := []string{head, subj}
-	if strings.TrimSpace(body) != "" {
-		block = append(block, u.styles.body.Render(body))
-	}
-	u.Println(lipgloss.JoinVertical(lipgloss.Left, block...))
+	u.Println(u.renderFrame(subject, body))
 }
 
 // Startup prints the version banner shown at program start. It goes to

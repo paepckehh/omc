@@ -453,3 +453,206 @@ func TestEmitDecoratesStateAndAction(t *testing.T) {
 		t.Errorf("text tokens lost: %q", got)
 	}
 }
+
+// newTestTTYUI builds a UI that reports IsTTY() == true, so the styled,
+// tree-grouped rendering paths are exercised. The writers are plain buffers,
+// so the rendered strings carry no real ANSI cursor control but do carry
+// lipgloss color escapes — the substring checks below stay robust to that.
+func newTestTTYUI() (*UI, *bytes.Buffer, *bytes.Buffer) {
+	out := &bytes.Buffer{}
+	err := &bytes.Buffer{}
+	ui := &UI{Out: out, Err: err, tty: true}
+	ui.initStyles()
+	return ui, out, err
+}
+
+// stripANSI removes CSI escape sequences so assertions can match the visible
+// text regardless of coloring.
+func stripANSI(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if i+1 < len(s) && s[i] == 0x1b && s[i+1] == '[' {
+			// skip to the terminator letter
+			j := i + 2
+			for j < len(s) && !isCSITerminator(s[j]) {
+				j++
+			}
+			i = j // loop's i++ advances past the terminator
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+func isCSITerminator(c byte) bool {
+	return c >= 0x40 && c <= 0x7e
+}
+
+func TestBeginGroupNoOpOffTTY(t *testing.T) {
+	ui, _, err := newTestUI()
+	ui.BeginGroup("g", 2)
+	ui.EndGroup()
+	if err.Len() != 0 {
+		t.Errorf("BeginGroup/EndGroup wrote to stderr off a TTY, got: %q", err.String())
+	}
+	if ui.group.active {
+		t.Error("group marked active off a TTY")
+	}
+}
+
+func TestBeginGroupNoOpForZeroLines(t *testing.T) {
+	ui, _, err := newTestTTYUI()
+	ui.BeginGroup("g", 0)
+	if ui.group.active {
+		t.Error("group active for zero lines")
+	}
+	if err.Len() != 0 {
+		t.Errorf("zero-line group wrote output, got: %q", err.String())
+	}
+}
+
+func TestGroupTreeConnectors(t *testing.T) {
+	ui, _, err := newTestTTYUI()
+	ui.BeginGroup("setup", 3)
+	ui.Info("first")
+	ui.Info("middle")
+	ui.Info("last")
+	got := stripANSI(err.String())
+	// Header line printed once.
+	if !strings.Contains(got, "setup") {
+		t.Errorf("missing group header, got: %q", got)
+	}
+	// Tree connectors: first ┌─, middle ├─, last └─.
+	if !strings.Contains(got, "┌─") {
+		t.Errorf("missing first-line ┌─ connector, got: %q", got)
+	}
+	if !strings.Contains(got, "├─") {
+		t.Errorf("missing middle-line ├─ connector, got: %q", got)
+	}
+	if !strings.Contains(got, "└─") {
+		t.Errorf("missing last-line └─ connector, got: %q", got)
+	}
+	// Group must auto-close after the configured line count.
+	if ui.group.active {
+		t.Error("group still active after all lines emitted")
+	}
+}
+
+func TestGroupTreeSingleLine(t *testing.T) {
+	ui, _, err := newTestTTYUI()
+	ui.BeginGroup("solo", 1)
+	ui.Info("only")
+	if ui.group.active {
+		t.Error("group still active after its single line")
+	}
+	got := stripANSI(err.String())
+	if !strings.Contains(got, "└─") {
+		t.Errorf("single-line group must use └─, got: %q", got)
+	}
+}
+
+func TestEndGroupClosesEarlyAndSeparates(t *testing.T) {
+	ui, _, err := newTestTTYUI()
+	ui.BeginGroup("g", 5)
+	ui.Info("one")
+	ui.EndGroup()
+	if ui.group.active {
+		t.Error("EndGroup did not clear group.active")
+	}
+	got := err.String()
+	// EndGroup prints a trailing blank separator line on a TTY.
+	if !strings.HasSuffix(got, "\n\n") {
+		t.Errorf("EndGroup must print a blank separator, got: %q", got)
+	}
+}
+
+func TestGroupAutoClosesAtLineCount(t *testing.T) {
+	// A group auto-closes once its configured line count is emitted; a
+	// further emit must NOT carry a tree connector.
+	ui, _, err := newTestTTYUI()
+	ui.BeginGroup("g", 1)
+	ui.Info("in")  // grouped → └─
+	ui.Info("out") // after auto-close → flat, no tree connector
+	got := stripANSI(err.String())
+	if strings.Count(got, "└─") != 1 {
+		t.Errorf("expected exactly one └─ (grouped line only), got: %q", got)
+	}
+	if ui.group.active {
+		t.Error("group not auto-closed after line count reached")
+	}
+}
+
+func TestRenderFrameContainsSubjectAndBody(t *testing.T) {
+	ui, _, _ := newTestTTYUI()
+	got := stripANSI(ui.renderFrame("fix: harden login", "sanitize inputs"))
+	if !strings.Contains(got, "fix: harden login") {
+		t.Errorf("frame missing subject, got: %q", got)
+	}
+	if !strings.Contains(got, "sanitize inputs") {
+		t.Errorf("frame missing body, got: %q", got)
+	}
+	if !strings.Contains(got, "commit message") {
+		t.Errorf("frame missing title, got: %q", got)
+	}
+	// Rounded-border box characters must be present.
+	if !strings.Contains(got, "╭") || !strings.Contains(got, "╰") {
+		t.Errorf("frame missing rounded border, got: %q", got)
+	}
+}
+
+func TestRenderFrameSubjectOnly(t *testing.T) {
+	ui, _, _ := newTestTTYUI()
+	got := stripANSI(ui.renderFrame("update", ""))
+	if !strings.Contains(got, "update") {
+		t.Errorf("frame missing subject, got: %q", got)
+	}
+	if !strings.Contains(got, "╭") {
+		t.Errorf("frame missing border, got: %q", got)
+	}
+}
+
+func TestSummaryTTYUsesFrame(t *testing.T) {
+	ui, out, _ := newTestTTYUI()
+	ui.Summary("feat: cool thing", "the body detail")
+	got := stripANSI(out.String())
+	if !strings.Contains(got, "feat: cool thing") {
+		t.Errorf("TTY Summary missing subject, got: %q", got)
+	}
+	if !strings.Contains(got, "the body detail") {
+		t.Errorf("TTY Summary missing body, got: %q", got)
+	}
+	if !strings.Contains(got, "╭") {
+		t.Errorf("TTY Summary must render a frame, got: %q", got)
+	}
+}
+
+func TestSummaryNonTTYUnchanged(t *testing.T) {
+	ui, out, _ := newTestUI()
+	ui.Summary("fix: bug", "body text")
+	got := out.String()
+	if !strings.Contains(got, "subject: fix: bug") {
+		t.Errorf("non-TTY Summary missing subject:, got: %q", got)
+	}
+	if !strings.Contains(got, "body:") || !strings.Contains(got, "body text") {
+		t.Errorf("non-TTY Summary missing body section, got: %q", got)
+	}
+	if strings.Contains(got, "╭") {
+		t.Errorf("non-TTY Summary must not render a frame, got: %q", got)
+	}
+}
+
+func TestEmitGroupedKeepsTokens(t *testing.T) {
+	ui, out, _ := newTestTTYUI()
+	ui.BeginGroup("g", 1)
+	ui.CommitResult("9d3f2ab", true)
+	// CommitResult writes to stdout (u.Out), so read from `out`.
+	got := stripANSI(out.String())
+	// Even inside a group the greppable tokens must survive.
+	for _, want := range []string{"OK", "omc", "commit", "committed", "hash=9d3f2ab", "signed=true"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("grouped line missing %q, got: %q", want, got)
+		}
+	}
+}
