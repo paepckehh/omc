@@ -96,7 +96,7 @@ No flags to remember, no prompts to answer. Run it twice, get two commits and tw
 <td width="50%" valign="top">
 
 ### 🚀 Optional push
-Set `OMC_PUSH_KEY_PATH` to an SSH key and `omc` pushes the new commit and its tag to the default remote after tagging — `git push; git push --tags`, all in-process via go-git. Failures degrade: the commit and tag stay local, never rolled back.
+Set `OMC_PUSH_KEY_PATH` to an SSH key and `omc` pushes the new commit and its tag to the default remote after tagging — `git push; git push --tags`, all in-process via go-git. Failures degrade: the commit and tag stay local, never rolled back. When the working tree is clean, the push still runs so tags left behind by a previously failed push get published.
 
 </td>
 </tr>
@@ -494,6 +494,10 @@ repository's default remote — the go-git equivalent of `git push; git push
 4. `NoErrAlreadyUpToDate` is treated as success. Any other failure (no
    remote, non-fast-forward, network) logs a warning and exits 0 — the
    commit and tag are never rolled back over a push problem.
+5. The push also runs when there is nothing to commit or tag (clean
+   working tree): a previous run may already have committed and tagged
+   locally while its push was skipped or failed, so the pending tags are
+   published now. Failures degrade exactly like the main push step.
 
 ```console
 $ export OMC_PUSH_KEY_PATH=~/.ssh/id_ed25519

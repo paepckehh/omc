@@ -100,9 +100,12 @@ func run() int {
 		return 1
 	}
 
-	// 3b. Nothing to commit: inform and exit cleanly.
+	// 3b. Nothing to commit: inform, still run the optional push (there
+	// may be nothing new on the branch but local tags could be ahead of
+	// the remote), and exit cleanly.
 	if strings.TrimSpace(diffText) == "" {
 		ui.CleanTree()
+		pushNothing(ui, repo, cfg)
 		return 0
 	}
 
@@ -231,6 +234,23 @@ func run() int {
 	}
 
 	return 0
+}
+
+// pushNothing performs the push step when there was nothing to commit or
+// tag. This covers the case where only local tags are ahead of the remote
+// (a previous run already committed and tagged locally, and the push that
+// was supposed to publish them failed or was skipped). All failures
+// degrade exactly like the main push step: warn and exit 0.
+func pushNothing(ui *output.UI, repo *git.Repository, cfg config.Config) {
+	if cfg.PushKeyPath == "" {
+		return
+	}
+	res, err := gitops.PushToRemote(repo, cfg.PushKeyPath)
+	if err != nil {
+		ui.Warn("push failed (%v); nothing pushed", err)
+		return
+	}
+	ui.PushResult(res.Remote, res.Branch, res.Tags)
 }
 
 // resolveTagName decides the tag name for the new commit. When OMC_TAG

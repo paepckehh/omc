@@ -173,6 +173,10 @@ them to the repository's default remote — the go-git equivalent of
 4. `NoErrAlreadyUpToDate` is treated as success. Any other failure (no
    remote, non-fast-forward, network) logs a warning and exits 0 — the
    commit and tag are never rolled back over a push problem.
+5. When there is nothing to commit or tag (clean working tree), the push
+   step still runs: a previous run may already have committed and tagged
+   locally while its push was skipped or failed, so the pending tags are
+   published now. Failures degrade exactly like the main push step.
 
 `gitops.PushToRemote(repo, keyPath)` returns a `PushResult{Remote, Branch,
 Tags}`; `output.UI.PushResult` renders the structured `pushed` record.
