@@ -288,6 +288,111 @@ for the identity fallback; nothing else depends on them.
 - Always run `go vet ./...` after changes; `make test` / `make vet` are the
   shortcuts.
 
+## Examples
+
+Real captured output (built from this tree, no Ollama running, non-TTY form
+piped through `cat` so the emoji glyphs are stripped). Use these as the
+ground-truth contract when changing the UI or wiring new steps.
+
+### Software signing key
+
+```console
+$ export OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519
+$ echo 'func main() { fmt.Println("hi") }' >> main.go
+$ omc 2>&1 | cat
+14:18:31 INFO omc omc v0.1.31
+14:18:31 INFO omc config detected environment count=1 OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519
+14:18:31 INFO omc config verified config count=1 sign_key=valid=true
+14:18:31 INFO omc open detecting repository
+14:18:31 OK omc open done
+14:18:31 INFO omc stage staging all changes
+14:18:31 OK omc stage done
+14:18:31 INFO omc diff reading staged diff
+14:18:31 OK omc diff done
+14:18:31 INFO omc diff changed files count=2
+  - .gitignore
+  - main.go
+14:18:31 INFO omc load key loading ssh signing key
+14:18:31 OK omc load key done
+14:18:31 INFO omc signing with ~/.ssh/id_ed25519 (ssh-ed25519)
+14:18:31 INFO omc sign signing commit with ssh key key=~/.ssh/id_ed25519
+14:18:31 INFO omc commit committing as Ada Lovelace <ada@example.com> (signed)
+14:18:31 OK omc commit done
+14:18:31 INFO omc tag bumping semver patch
+14:18:31 OK omc tag done
+14:18:31 INFO omc msg subject: update
+14:18:31 OK omc commit committed hash=3f8bc54 signed=true
+14:18:31 OK omc tag tagged tag=v0.0.1 hash=3f8bc54 signed=true
+```
+
+### Smartcard (FIDO2) signing key — touch countdown (TTY)
+
+On a TTY the structured `touch` notice is followed by an animated countdown
+while the signature waits for the device touch (commit and tag are separate
+touches):
+
+```console
+$ ssh-add ~/.ssh/id_ed25519_sk
+$ export OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519_sk
+$ omc
+...
+14:22:09 WARN omc warning: ssh key ~/.ssh/id_ed25519_sk is a smartcard security key; signing via the ssh-agent
+14:22:09 INFO omc sign signing commit with ssh-agent security key key=~/.ssh/id_ed25519_sk mode=smartcard algo=sk-ssh-ed25519@openssh.com
+14:22:09 INFO omc touch security key detected: touch your smartcard/yubikey when it blinks to authorise the commit signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the commit signing
+🔑 TOUCH YOUR SECURITY KEY  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:28
+🔑 TOUCH YOUR SECURITY KEY  ▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:21
+14:22:14 OK omc commit done
+14:22:14 INFO omc touch security key detected: touch your smartcard/yubikey when it blinks to authorise the tag signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the tag signing
+🔑 TOUCH YOUR SECURITY KEY  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:29
+14:22:18 OK omc tag done
+14:22:18 OK omc commit committed hash=5c91e2a signed=true
+14:22:18 OK omc tag tagged tag=v0.0.2 hash=5c91e2a signed=true
+```
+
+When the agent has no matching identity, omc degrades — never blocks:
+
+```console
+14:23:55 WARN omc warning: ssh key ~/.ssh/id_ed25519_sk is a smartcard security key, but no ssh-agent identity matches
+(connect to ssh-agent for security key ~/.ssh/id_ed25519_sk (is ssh-agent running?): dial unix: missing address); committing unsigned
+14:23:55 OK omc sign committing unsigned signed=false
+```
+
+### Subject / message / tag override
+
+Skip the LLM entirely and write the commit text + tag name yourself:
+
+```console
+$ OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519 \
+  OMC_SUBJECT="feat: add greeting to main" \
+  OMC_MESSAGE='Adds a fmt.Println("hi") entrypoint so the binary does something on run.' \
+  OMC_TAG="v1.0.0" \
+  omc 2>&1 | cat
+14:24:10 INFO omc config detected environment count=4 OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519 OMC_SUBJECT=feat: add greeting to main OMC_MESSAGE=Adds a fmt.Println("hi") entrypoint so the binary does something on run. OMC_TAG=v1.0.0
+14:24:10 INFO omc config verified config count=2 sign_key=valid=true tag_override=valid=true
+...
+14:24:10 INFO omc message override active (OMC_SUBJECT/OMC_MESSAGE)
+14:24:10 INFO omc sign signing commit with ssh key key=~/.ssh/id_ed25519
+14:24:10 INFO omc commit committing as Ada Lovelace <ada@example.com> (signed)
+14:24:11 OK omc commit done
+14:24:11 INFO omc tag tagging v1.0.0
+14:24:11 OK omc tag done
+14:24:11 OK omc commit committed hash=3691ad8 signed=true
+14:24:11 OK omc tag tagged tag=v1.0.0 hash=3691ad8 signed=true
+```
+
+### Optional push (with a security-key push path)
+
+```console
+$ export OMC_PUSH_KEY_PATH=~/.ssh/id_ed25519_sk
+$ omc
+...
+14:26:10 OK omc tag tagged tag=v1.0.2 hash=5c91e2a signed=true
+14:26:10 INFO omc touch security key detected: touch your smartcard/yubikey when it blinks to authorise the push key=~/.ssh/id_ed25519_sk mode=smartcard action=the push
+🔑 TOUCH YOUR SECURITY KEY  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:27
+14:26:15 OK omc push done
+14:26:15 OK omc push pushed remote=origin branch=main tags=true
+```
+
 ## Definition of done
 
 1. `gofmt -s -w .`
