@@ -99,6 +99,7 @@ type UI struct {
 	animOn   bool
 	animCtx  chan struct{}
 	animStep string
+	touch    *touchCountdown
 }
 
 type styles struct {
@@ -601,6 +602,166 @@ func (u *UI) SecurityKeyTouchNotice(keyPath, action string) {
 		F("mode", "smartcard"),
 		F("action", action),
 	)
+}
+
+// touchCountdown is an animated countdown shown on stderr while a
+// smartcard-bound operation (commit/tag signing, SSH push) blocks waiting
+// for the user to touch the device. It renders a single rewriting line with
+// a 🔑 glyph, a shrinking progress bar, and the seconds remaining, so the
+// urgency of the pending touch is unmistakable. The countdown runs
+// concurrently with the blocking operation: start it, run the operation on
+// the calling goroutine, then stop it once the operation returns.
+type touchCountdown struct {
+	remaining float64
+	done      chan struct{}
+	over      bool
+}
+
+// countdownBarWidth is the number of half-block cells used for the progress
+// bar shown alongside the touch countdown.
+const countdownBarWidth = 16
+
+// countdownTotal is the number of seconds the countdown starts at. It is a
+// generous upper bound for a security-key touch; the countdown stops the
+// moment the operation completes, long before this in the common case.
+const countdownTotal = 30.0
+
+// countdownFPS is the animation frame rate for the touch countdown. 10 FPS
+// keeps the seconds display and progress bar smooth without burning CPU.
+const countdownFPS = 10
+
+// newTouchCountdown creates a countdown ready to be started.
+func newTouchCountdown() *touchCountdown {
+	return &touchCountdown{remaining: countdownTotal, done: make(chan struct{})}
+}
+
+// render returns the styled countdown line: a key glyph, the progress bar,
+// and the remaining time, all on one line.
+func (c *touchCountdown) render() string {
+	elapsed := countdownTotal - c.remaining
+	frac := 0.0
+	if countdownTotal > 0 {
+		frac = elapsed / countdownTotal
+	}
+	if frac < 0 {
+		frac = 0
+	} else if frac > 1 {
+		frac = 1
+	}
+	full := int(frac * float64(countdownBarWidth))
+	if full > countdownBarWidth {
+		full = countdownBarWidth
+	}
+	empty := countdownBarWidth - full
+
+	bar := ""
+	for range full {
+		bar += "▰"
+	}
+	for range empty {
+		bar += "▱"
+	}
+	barStyled := lipgloss.NewStyle().Foreground(palette.warn).Render(bar)
+	key := lipgloss.NewStyle().Bold(true).Foreground(palette.warn).Render("🔑 TOUCH YOUR SECURITY KEY")
+	timer := lipgloss.NewStyle().Bold(true).Foreground(palette.err).Render("⏱ " + c.fmtSeconds())
+	return fmt.Sprintf("%s  %s  %s", key, barStyled, timer)
+}
+
+// fmtSeconds renders the remaining time as an M:SS string.
+func (c *touchCountdown) fmtSeconds() string {
+	s := int(c.remaining)
+	if s < 0 {
+		s = 0
+	}
+	return fmt.Sprintf("%d:%02d", s/60, s%60)
+}
+
+// stepTouch runs fn while showing either the animated touch countdown (on a
+// TTY) or the structured step records (off a TTY). It is the smartcard-aware
+// counterpart to Step: where Step shows a generic scramble spinner, stepTouch
+// shows a blinking-touch countdown so the user knows an action is required
+// right now. The structured touch notice (SecurityKeyTouchNotice) is emitted
+// by the caller beforehand; stepTouch only owns the animation and the
+// step-completion record.
+func (u *UI) stepTouch(step, msg string, fn func() error) error {
+	if !u.tty {
+		u.emit(u.Err, "INFO", step, msg)
+		err := fn()
+		if err != nil {
+			u.emit(u.Err, "FAIL", step, err.Error(), F("err", err.Error()))
+			return err
+		}
+		u.emit(u.Err, "OK", step, "done")
+		return nil
+	}
+
+	cd := newTouchCountdown()
+	u.mu.Lock()
+	u.touch = cd
+	u.mu.Unlock()
+
+	fps := time.Second / countdownFPS
+	go func(stop <-chan struct{}) {
+		tk := time.NewTicker(fps)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tk.C:
+				u.mu.Lock()
+				if u.touch == nil || u.touch != cd {
+					u.mu.Unlock()
+					return
+				}
+				cd.remaining -= fps.Seconds()
+				if cd.remaining < 0 {
+					cd.remaining = 0
+				}
+				frame := cd.render()
+				fmt.Fprintf(u.Err, "\r\033[K%s", frame)
+				u.mu.Unlock()
+			}
+		}
+	}(cd.done)
+
+	err := fn()
+
+	u.mu.Lock()
+	if !cd.over {
+		cd.over = true
+		close(cd.done)
+	}
+	u.touch = nil
+	fmt.Fprint(u.Err, "\r\033[K")
+	u.mu.Unlock()
+
+	if err != nil {
+		u.emit(u.Err, "FAIL", step, err.Error(), F("err", err.Error()))
+		return err
+	}
+	u.emit(u.Err, "OK", step, "done")
+	return nil
+}
+
+// StepTouchCommit runs the commit-signing step fn while showing the animated
+// touch countdown (TTY) or the structured step records (non-TTY). Use it for
+// the smartcard commit-signing path so the user is prompted to touch the
+// device right now.
+func (u *UI) StepTouchCommit(step, msg string, fn func() error) error {
+	return u.stepTouch(step, msg, fn)
+}
+
+// StepTouchTag runs the tag-signing step fn with the touch countdown. Use it
+// for the smartcard tag-signing path.
+func (u *UI) StepTouchTag(step, msg string, fn func() error) error {
+	return u.stepTouch(step, msg, fn)
+}
+
+// StepTouchPush runs the SSH push step fn with the touch countdown when the
+// push key is a security-key handle. Use it for the smartcard push path.
+func (u *UI) StepTouchPush(step, msg string, fn func() error) error {
+	return u.stepTouch(step, msg, fn)
 }
 
 // PushResult renders the post-push notice to stdout: the remote that was

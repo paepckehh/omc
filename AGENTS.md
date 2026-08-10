@@ -230,12 +230,21 @@ PKCS#11, no `ssh-agent` binary, no CGO:
   `git verify-commit` work).
 - **Touch notice** — every smartcard-bound step (commit signing, tag
   signing, and the SSH push when `OMC_PUSH_KEY_PATH` names a security-key
-  handle) is preceded by a prominent `touch` notice on stderr via
+  handle) is preceded by a structured `touch` notice on stderr via
   `output.UI.SecurityKeyTouchNotice`, telling the user to touch their
   smartcard/yubikey when it blinks to authorise the operation. Each
   signature/auth challenge forwarded by the ssh-agent to the authenticator
   is a fresh user-presence check, so the notice is emitted once per step
   that needs a touch (commit and tag are separate touches).
+- **Touch countdown** — on a TTY, each smartcard-bound step additionally
+  runs an animated, rewriting countdown (`output.UI.stepTouch` via
+  `StepTouchCommit` / `StepTouchTag` / `StepTouchPush`) while the blocking
+  operation waits for the device: a bold `🔑 TOUCH YOUR SECURITY KEY`
+  prompt, a shrinking progress bar, and an `M:SS` timer starting at 30s.
+  The countdown runs concurrently with the signature/push call and stops
+  the moment the operation returns, so the urgency of the pending touch is
+  unmistakable. On a non-TTY it degrades to the ordinary structured
+  `INFO`/`OK`/`FAIL` step records so captured logs stay greppable.
 - **Limitations** — resident/discoverable or verify-required (-O
   verify-required) keys cannot be *enforced* by omc; they behave like
   ordinary sk keys, with whatever user verification the device and agent

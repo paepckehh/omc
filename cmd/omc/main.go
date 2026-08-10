@@ -170,7 +170,11 @@ func run() int {
 	// 6. Create the commit, signing it when a key is available.
 	id := gitops.ResolveIdentity(repo)
 	var hash plumbing.Hash
-	commitErr := ui.Step("commit", commitLabel(id, signer != nil), func() error {
+	commitStep := ui.Step
+	if skMode && signer != nil {
+		commitStep = ui.StepTouchCommit
+	}
+	commitErr := commitStep("commit", commitLabel(id, signer != nil), func() error {
 		if signer != nil {
 			h, err := gitops.SignedCommit(repo, wt, msg, func(payload []byte) ([]byte, error) {
 				return signer.Sign(payload)
@@ -200,10 +204,11 @@ func run() int {
 	}
 
 	var tagName string
+	tagStep := ui.Step
 	if signer != nil && skMode {
-		ui.SecurityKeyTouchNotice(cfg.KeyPath, "the tag signing")
+		tagStep = ui.StepTouchTag
 	}
-	if err := ui.Step("tag", tagStepLabel(cfg), func() error {
+	if err := tagStep("tag", tagStepLabel(cfg), func() error {
 		name, skipped, terr := resolveTagName(repo, cfg)
 		if skipped {
 			ui.Warn("OMC_TAG %q is not strict semver (vMAJOR.MINOR.PATCH); falling back to auto-bump", cfg.Tag)
@@ -233,10 +238,11 @@ func run() int {
 	// degrade: the commit and tag are never rolled back over a push
 	// problem, matching the "always degrade, never block" contract.
 	if cfg.PushKeyPath != "" {
+		pushStep := ui.Step
 		if sign.IsSecurityKeyPath(cfg.PushKeyPath) {
-			ui.SecurityKeyTouchNotice(cfg.PushKeyPath, "the push")
+			pushStep = ui.StepTouchPush
 		}
-		if err := ui.Step("push", "pushing commit and tags to remote", func() error {
+		if err := pushStep("push", "pushing commit and tags to remote", func() error {
 			_, err := gitops.PushToRemote(repo, cfg.PushKeyPath)
 			return err
 		}); err != nil {
@@ -304,10 +310,16 @@ func pushNothing(ui *output.UI, repo *git.Repository, cfg config.Config) {
 	if cfg.PushKeyPath == "" {
 		return
 	}
+	pushStep := ui.Step
 	if sign.IsSecurityKeyPath(cfg.PushKeyPath) {
-		ui.SecurityKeyTouchNotice(cfg.PushKeyPath, "the push")
+		pushStep = ui.StepTouchPush
 	}
-	res, err := gitops.PushToRemote(repo, cfg.PushKeyPath)
+	var res gitops.PushResult
+	err := pushStep("push", "pushing commit and tags to remote", func() error {
+		var perr error
+		res, perr = gitops.PushToRemote(repo, cfg.PushKeyPath)
+		return perr
+	})
 	if err != nil {
 		ui.Warn("push failed (%v); nothing pushed", err)
 		return

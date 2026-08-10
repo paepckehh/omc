@@ -260,6 +260,82 @@ func TestSecurityKeyTouchNoticeNonTTY(t *testing.T) {
 	}
 }
 
+func TestStepTouchCommitNonTTY(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		ui, _, err := newTestUI()
+		if eerr := ui.StepTouchCommit("commit", "committing as Test <t@e> (signed)", func() error { return nil }); eerr != nil {
+			t.Fatalf("StepTouchCommit returned error: %v", eerr)
+		}
+		got := err.String()
+		if !strings.Contains(got, "INFO") || !strings.Contains(got, "commit") {
+			t.Errorf("missing announce line, got: %q", got)
+		}
+		if !strings.Contains(got, "OK") || !strings.Contains(got, "done") {
+			t.Errorf("missing done line, got: %q", got)
+		}
+	})
+	t.Run("failure", func(t *testing.T) {
+		ui, _, err := newTestUI()
+		want := errors.New("agent unreachable")
+		if eerr := ui.StepTouchCommit("commit", "committing", func() error { return want }); eerr == nil {
+			t.Fatal("StepTouchCommit returned nil for failing fn")
+		}
+		got := err.String()
+		if !strings.Contains(got, "FAIL") || !strings.Contains(got, "agent unreachable") {
+			t.Errorf("missing FAIL record, got: %q", got)
+		}
+	})
+}
+
+func TestStepTouchPushNonTTY(t *testing.T) {
+	ui, _, err := newTestUI()
+	if eerr := ui.StepTouchPush("push", "pushing commit and tags to remote", func() error { return nil }); eerr != nil {
+		t.Fatalf("StepTouchPush returned error: %v", eerr)
+	}
+	got := err.String()
+	if !strings.Contains(got, "push") || !strings.Contains(got, "OK") {
+		t.Errorf("missing push step records, got: %q", got)
+	}
+}
+
+func TestTouchCountdownRender(t *testing.T) {
+	cd := newTouchCountdown()
+	got := cd.render()
+	if !strings.Contains(got, "TOUCH YOUR SECURITY KEY") {
+		t.Errorf("missing touch prompt, got: %q", got)
+	}
+	if !strings.Contains(got, "⏱") {
+		t.Errorf("missing timer glyph, got: %q", got)
+	}
+	if !strings.Contains(got, "0:30") {
+		t.Errorf("missing initial 0:30 seconds, got: %q", got)
+	}
+	if !strings.Contains(got, "▱") {
+		t.Errorf("missing empty progress bar cells, got: %q", got)
+	}
+
+	// Advance ~halfway: bar must contain both filled and empty cells and
+	// the timer must read roughly 15s.
+	cd.remaining = 15.0
+	got = cd.render()
+	if !strings.Contains(got, "0:15") {
+		t.Errorf("missing 0:15 after advance, got: %q", got)
+	}
+	if !strings.Contains(got, "▰") || !strings.Contains(got, "▱") {
+		t.Errorf("missing mixed progress bar cells, got: %q", got)
+	}
+
+	// Exhaust the countdown: timer clamps to 0:00, bar is fully filled.
+	cd.remaining = 0
+	got = cd.render()
+	if !strings.Contains(got, "0:00") {
+		t.Errorf("missing 0:00 at zero, got: %q", got)
+	}
+	if !strings.Contains(got, "▰") {
+		t.Errorf("missing filled progress bar cells at zero, got: %q", got)
+	}
+}
+
 func TestErrorNonTTY(t *testing.T) {
 	ui, _, err := newTestUI()
 	ui.Error(errors.New("not a git repository"))
@@ -351,6 +427,7 @@ func TestActionEmoji(t *testing.T) {
 		"commit":   "📝",
 		"tag":      "🏷️",
 		"sign":     "✍️",
+		"touch":    "🔐",
 		"msg":      "💬",
 		"unknown":  "",
 	}

@@ -56,6 +56,7 @@ var actionIcons = map[string]string{
 	"commit":   "📝",  // creating the commit
 	"tag":      "🏷️", // semver tagging
 	"sign":     "✍️", // signing notice
+	"touch":    "🔐",  // security-key touch countdown
 	"msg":      "💬",  // commit message preview
 	"push":     "🚀",  // pushing to the remote
 }
