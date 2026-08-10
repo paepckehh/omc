@@ -22,7 +22,6 @@ builds:
       - dragonfly
       - solaris
       - illumos
-      - aix
     goarch:
       - amd64
       - arm64
@@ -38,31 +37,6 @@ builds:
       - s390x
       - loong64
     ignore:
-      # aix only targets ppc64
-      - goos: aix
-        goarch: amd64
-      - goos: aix
-        goarch: arm64
-      - goos: aix
-        goarch: "386"
-      - goos: aix
-        goarch: arm
-      - goos: aix
-        goarch: ppc64le
-      - goos: aix
-        goarch: mips
-      - goos: aix
-        goarch: mipsle
-      - goos: aix
-        goarch: mips64
-      - goos: aix
-        goarch: mips64le
-      - goos: aix
-        goarch: riscv64
-      - goos: aix
-        goarch: s390x
-      - goos: aix
-        goarch: loong64
       # dragonfly only targets amd64
       - goos: dragonfly
         goarch: arm64
@@ -161,6 +135,12 @@ builds:
         goarch: s390x
       - goos: darwin
         goarch: loong64
+      # netbsd does not support riscv64
+      - goos: netbsd
+        goarch: riscv64
+      # openbsd does not support mips64
+      - goos: openbsd
+        goarch: mips64
 
 archives:
   - id: omc

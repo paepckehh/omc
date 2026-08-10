@@ -14,7 +14,11 @@ is an environment variable — and inside any git working tree
 one 3 letter command does the equivalent of:
 
 ```console
-git add -A && git commit -Sm <detailed llm generated commit message> && git tag -s <old_semver+1> && [opt: git push --tags]
+git add -A 
+git commit -S -m <generate detailed commit message/analysis> 
+git tag -s <old_semver+1> 
+[opt: git push]
+[opt: git push --tags]
 ```
 
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev)
