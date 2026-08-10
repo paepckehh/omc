@@ -8,12 +8,13 @@
 sign tag push utility, with agent/human role seperation for signed commits
 including llm generated commit message and final review/push for humans.
 utility written in pure Go. It takes **zero command line arguments**, 
-zero runtime dependencies: not even legacy git installed every behavior
+zero runtime dependencies: not even legacy git installed - every behavior
 is an environment variable — and inside any git working tree 
 
 one 3 letter command does the equivalent of:
 
-```console
+```script 
+#!/bin/sh
 git add -A 
 git commit -S -m <generate detailed commit message/analysis> 
 git tag -s <old_semver+1> 
