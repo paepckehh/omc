@@ -109,6 +109,11 @@ type UI struct {
 
 	tty    bool
 	styles styles
+	// width is the detected terminal width (in cells) at construction time,
+	// or 0 when it could not be determined. Used to size the commit-message
+	// frame so it follows the real terminal width instead of the content's
+	// natural width.
+	width int
 
 	mu       sync.Mutex
 	anim     *anim
@@ -163,16 +168,26 @@ type styles struct {
 
 // New returns a UI writing to the passed streams. TTY detection is performed
 // on stderr: when stderr is a terminal the styled, animated UI is used;
-// otherwise the plain text fallback is used.
+// otherwise the plain text fallback is used. The terminal width is probed at
+// the same time so the commit-message frame can be sized to the real
+// terminal width (capped at 80) instead of the content's natural width.
 func New(out, err io.Writer) *UI {
 	tty := false
+	width := 0
 	if f, ok := err.(*os.File); ok {
-		tty = term.IsTerminal(uintptr(f.Fd()))
+		fd := uintptr(f.Fd())
+		if term.IsTerminal(fd) {
+			tty = true
+			if w, _, err := term.GetSize(fd); err == nil && w > 0 {
+				width = w
+			}
+		}
 	}
 	ui := &UI{
-		Out: out,
-		Err: err,
-		tty: tty,
+		Out:   out,
+		Err:   err,
+		tty:   tty,
+		width: width,
 	}
 	ui.initStyles()
 	return ui
@@ -252,18 +267,74 @@ func (u *UI) EndGroup() {
 	}
 }
 
+// frameMaxWidth caps the commit-message frame width. Even on very wide
+// terminals a commit message line longer than 80 cells is hard to read, so
+// the frame never grows beyond this.
+const frameMaxWidth = 80
+
+// frameFallbackWidth is the assumed terminal width when the real width
+// could not be detected (e.g. a pseudo-terminal without a size ioctl). It
+// matches frameMaxWidth so the frame is readable out of the box.
+const frameFallbackWidth = 80
+
+// frameContentBudget returns the inner content width (the number of cells
+// available for text inside the frame) given an outer frame width. The
+// rounded border occupies 2 cells (one each side) and the 0,1 padding
+// adds another 2 cells, so the budget is outer - 4.
+func frameContentBudget(outerWidth int) int {
+	budget := outerWidth - 4
+	if budget < 1 {
+		return 1
+	}
+	return budget
+}
+
+// frameWidth returns the outer width the commit-message frame should target:
+// the detected terminal width capped at frameMaxWidth, or frameFallbackWidth
+// when the terminal width is unknown. The result is always >= 8 so the
+// border + padding always leave room for at least a few characters of text.
+func (u *UI) frameWidth() int {
+	w := u.width
+	if w <= 0 {
+		w = frameFallbackWidth
+	}
+	if w > frameMaxWidth {
+		w = frameMaxWidth
+	}
+	if w < 8 {
+		w = 8
+	}
+	return w
+}
+
 // renderFrame returns the commit message rendered inside a rounded-border
 // box on a light background, with a small "commit message" title sitting on
 // top of the box. Used by Summary on a TTY to make the generated/override
 // commit message stand out from the surrounding structured log lines.
+//
+// The box is sized to the real terminal width (probed at construction time
+// and capped at 80 cells) so it does not collapse to the content's natural
+// width on short messages; when the terminal width is unknown an 80-cell
+// fallback is used. The subject and body are wrapped to the box's inner
+// content width so long lines break instead of stretching the frame.
 func (u *UI) renderFrame(subject, body string) string {
-	subj := u.styles.frameSubject.Render("💬 " + subject)
+	outer := u.frameWidth()
+	budget := frameContentBudget(outer)
+
+	subj := u.styles.frameSubject.
+		Width(budget).
+		Render("💬 " + subject)
+
 	content := subj
 	if strings.TrimSpace(body) != "" {
-		content = lipgloss.JoinVertical(lipgloss.Left, content, "",
-			u.styles.frameBody.Render(body))
+		bodyBlock := u.styles.frameBody.
+			Width(budget).
+			Render(body)
+		content = lipgloss.JoinVertical(lipgloss.Left, content, "", bodyBlock)
 	}
-	box := u.styles.frameBox.Render(content)
+	box := u.styles.frameBox.
+		Width(outer - 2). // border consumes 2 cells; this sets the inner width
+		Render(content)
 	header := "  └ " + u.styles.frameTitle.Render("commit message")
 	return lipgloss.JoinVertical(lipgloss.Left, header, box)
 }

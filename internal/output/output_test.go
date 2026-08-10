@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // newTestUI builds a UI whose stderr is a non-file buffer, so IsTTY() is
@@ -611,6 +613,99 @@ func TestRenderFrameSubjectOnly(t *testing.T) {
 	if !strings.Contains(got, "╭") {
 		t.Errorf("frame missing border, got: %q", got)
 	}
+}
+
+// newTestTTYUIWidth builds a TTY UI with an explicit terminal width so the
+// frame-width logic can be exercised deterministically.
+func newTestTTYUIWidth(width int) (*UI, *bytes.Buffer, *bytes.Buffer) {
+	out := &bytes.Buffer{}
+	err := &bytes.Buffer{}
+	ui := &UI{Out: out, Err: err, tty: true, width: width}
+	ui.initStyles()
+	return ui, out, err
+}
+
+func TestFrameWidthFallsBackTo80WhenUnknown(t *testing.T) {
+	// width == 0 (terminal size could not be probed) → 80-cell fallback.
+	ui, _, _ := newTestTTYUIWidth(0)
+	if got := ui.frameWidth(); got != 80 {
+		t.Errorf("frameWidth() = %d for unknown width, want 80", got)
+	}
+}
+
+func TestFrameWidthCappedAt80(t *testing.T) {
+	ui, _, _ := newTestTTYUIWidth(200)
+	if got := ui.frameWidth(); got != 80 {
+		t.Errorf("frameWidth() = %d for 200-cell terminal, want 80 (cap)", got)
+	}
+}
+
+func TestFrameWidthFollowsRealTerminal(t *testing.T) {
+	ui, _, _ := newTestTTYUIWidth(40)
+	if got := ui.frameWidth(); got != 40 {
+		t.Errorf("frameWidth() = %d for 40-cell terminal, want 40", got)
+	}
+}
+
+func TestFrameWidthFloorsAt8(t *testing.T) {
+	ui, _, _ := newTestTTYUIWidth(3)
+	if got := ui.frameWidth(); got != 8 {
+		t.Errorf("frameWidth() = %d for 3-cell terminal, want 8 (floor)", got)
+	}
+}
+
+func TestFrameWidthBudget(t *testing.T) {
+	if got := frameContentBudget(80); got != 76 {
+		t.Errorf("frameContentBudget(80) = %d, want 76", got)
+	}
+	if got := frameContentBudget(40); got != 36 {
+		t.Errorf("frameContentBudget(40) = %d, want 36", got)
+	}
+}
+
+func TestRenderFrameShortMessageFillsWidth(t *testing.T) {
+	// A short subject must NOT collapse the frame to the content's natural
+	// width: the frame must span the target width (80 here).
+	ui, _, _ := newTestTTYUIWidth(0)
+	got := stripANSI(ui.renderFrame("update", ""))
+	lines := strings.Split(got, "\n")
+	var topBorder string
+	for _, l := range lines {
+		if strings.HasPrefix(l, "╭") {
+			topBorder = l
+			break
+		}
+	}
+	if topBorder == "" {
+		t.Fatalf("missing top border line, got: %q", got)
+	}
+	if w := lipglossWidth(topBorder); w != 80 {
+		t.Errorf("frame width = %d for short message, want 80 (frame must size to terminal, not content): %q", w, topBorder)
+	}
+}
+
+func TestRenderFrameWrapsLongBody(t *testing.T) {
+	// A long body line must wrap inside the frame rather than stretching it
+	// past the target width.
+	ui, _, _ := newTestTTYUIWidth(40)
+	longBody := "This is a very long body line that definitely exceeds the 40 cell terminal width and must wrap."
+	got := stripANSI(ui.renderFrame("subj", longBody))
+	lines := strings.Split(got, "\n")
+	_ = lines
+	for _, l := range lines {
+		if w := lipglossWidth(l); w > 40 {
+			t.Errorf("frame line exceeds terminal width: %d cells: %q", w, l)
+		}
+	}
+	if !strings.Contains(got, longBody[:20]) {
+		t.Errorf("frame missing body content, got: %q", got)
+	}
+}
+
+// lipglossWidth returns the visible width of a string in cells, ignoring
+// ANSI escape sequences. Used by the frame-width assertions above.
+func lipglossWidth(s string) int {
+	return lipgloss.Width(stripANSI(s))
 }
 
 func TestSummaryTTYUsesFrame(t *testing.T) {
