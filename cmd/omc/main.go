@@ -6,6 +6,10 @@
 //
 //	OMC_SIGN_KEY_PATH   path to an SSH private key; if set and valid, the
 //	                   commit is signed with it (git's SSH signing format).
+//	                   FIDO2 security-key handles (id_ed25519_sk and
+//	                   id_ecdsa_sk, bound to a smartcard) are supported:
+//	                   they are signed through the ssh-agent, which talks
+//	                   to the device (touch/PIN enforced there).
 //	                   If set but unusable, omc logs a warning and
 //	                   commits unsigned.
 //	OMC_NAME       commit author/committer name; falls back to git
@@ -26,6 +30,8 @@
 //	OMC_PUSH_KEY_PATH  path to an SSH private key; if set and readable,
 //	                   omc pushes the new commit and tags to the default
 //	                   remote after tagging ("git push; git push --tags").
+//	                   FIDO2 security-key handles are supported and
+//	                   authenticate through the ssh-agent.
 //	                   If set but unusable, the push is skipped with a
 //	                   warning; the commit and tag are never rolled back.
 //
@@ -36,6 +42,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"time"
@@ -142,24 +149,19 @@ func run() int {
 
 	// 5. Sign the commit with the configured SSH key (opt-in).
 	var signer *sign.Signer
+	skMode := false
 	if cfg.KeyPath != "" {
-		if err := ui.Step("load key", "loading ssh signing key", func() error {
-			s, err := sign.Load(cfg.KeyPath)
-			if err != nil {
-				return err
-			}
-			signer = s
-			return nil
-		}); err != nil {
-			// The user asked for signing but the key cannot be used:
-			// degrade to an unsigned commit and record why.
-			ui.Warn("ssh key %s unusable (%v); committing unsigned", cfg.KeyPath, err)
-			signer = nil
-		} else {
-			ui.SigningNotice(cfg.KeyPath, true)
-		}
+		signer, skMode = loadSigner(ui, cfg)
+	}
+
+	// Commit signed state is derived from the signer that was actually
+	// established, including the security-key (smartcard) degrade path.
+	// Loader warnings already explain the details; the notice line states
+	// the final mode so the record is unambiguous.
+	if skMode && signer != nil {
+		ui.SecurityKeyModeNotice(cfg.KeyPath, signer.PublicAlgorithm())
 	} else {
-		ui.SigningNotice("", false)
+		ui.SigningNotice(cfg.KeyPath, signer != nil)
 	}
 
 	// 6. Create the commit, signing it when a key is available.
@@ -376,6 +378,63 @@ func generateMessageProgress(ui *output.UI, ctx context.Context, client *ollama.
 	ui.SpinnerStop()
 
 	return gitops.CommitMessage{Subject: tldr, Body: detail}, nil
+}
+
+// loadSigner resolves the commit signing backend for the configured ssh key
+// path, degrading like git does and never blocking the pipeline:
+//
+//   - software keys (id_ed25519, id_rsa, ...) are loaded directly and signed
+//     in pure Go;
+//   - FIDO2 security-key keys (id_ed25519_sk, id_ecdsa_sk) cannot be loaded
+//     in pure Go (the private half lives on the smartcard), so omc falls
+//     back to the ssh-agent, which forwards the signature request to the
+//     authenticator; if the agent does not hold the identity, omc warns and
+//     commits unsigned;
+//   - anything else (missing, unreadable, corrupt, passphrase-encrypted) is
+//     warned about and commits unsigned.
+//
+// It returns nil for "no usable signer" so callers fall through to an
+// unsigned commit; the returned bool reports whether the signer path used
+// the smartcard (security-key) backend, so the caller can render the
+// correct notice.
+func loadSigner(ui *output.UI, cfg config.Config) (*sign.Signer, bool) {
+	// A FIDO2 security-key handle (id_ed25519_sk) is not a private key at
+	// all: the file only references a smartcard-held key, and pure Go
+	// cannot parse it. Detect that up front (DetectKind also checks the
+	// adjacent .pub file) and route straight to the ssh-agent.
+	if sign.DetectKind(cfg.KeyPath) == sign.KindSecurityKey {
+		if s, err := sign.SecurityKeySigner(cfg.KeyPath); err == nil {
+			ui.Warn("ssh key %s is a smartcard security key; signing via the ssh-agent (touch the device when prompted)", cfg.KeyPath)
+			return s, true
+		} else {
+			ui.Warn("ssh key %s is a smartcard security key, but no ssh-agent identity matches (%v); committing unsigned", cfg.KeyPath, err)
+			return nil, true
+		}
+	}
+
+	var signer *sign.Signer
+	stepErr := ui.Step("load key", "loading ssh signing key", func() error {
+		var err error
+		signer, err = sign.Load(cfg.KeyPath)
+		return err
+	})
+	if stepErr == nil {
+		ui.Info("signing with %s (%s)", cfg.KeyPath, signer.PublicAlgorithm())
+		return signer, false
+	}
+
+	if errors.Is(stepErr, sign.ErrSecurityKeyOnly) {
+		if s, err := sign.SecurityKeySigner(cfg.KeyPath); err == nil {
+			ui.Warn("ssh key %s is a smartcard security key; signing via the ssh-agent (touch the device when prompted)", cfg.KeyPath)
+			return s, true
+		} else {
+			ui.Warn("ssh key %s is a smartcard security key, but no ssh-agent identity matches (%v); committing unsigned", cfg.KeyPath, err)
+			return nil, true
+		}
+	}
+
+	ui.Warn("ssh key %s unusable (%v); committing unsigned", cfg.KeyPath, stepErr)
+	return nil, false
 }
 
 // commitLabel renders the step label shown while the commit is being created.

@@ -22,13 +22,17 @@ instance. Every line of output is a structured, timestamped log record.
 - **No runtime dependency on external binaries.** No `git`, no `ssh-keygen`.
   Everything uses libraries: `github.com/go-git/go-git/v5` for repository
   operations, `github.com/hiddeco/sshsig` + `golang.org/x/crypto/ssh` for
-  SSH signing.
+  SSH signing. FIDO2 security-key keys (id_ed25519_sk / id_ecdsa_sk) sign
+  through the running ssh-agent (`golang.org/x/crypto/ssh/agent`), which
+  talks to the smartcard; no agent required for ordinary software keys.
 - **Always degrade, never block.** If Ollama is unreachable or the LLM call
   fails, fall back to the default subject `update` and continue. If the key
   file is missing/invalid when configured, log a warning and commit
-  unsigned. If `OMC_PUSH_KEY_PATH` is set but unusable, or the push fails,
-  log a warning and leave the commit and tag local (never rolled back). Not
-  being in a repo is an error.
+  unsigned. A configured security-key handle without a matching ssh-agent
+  identity degrades the same way (warn + unsigned commit). If
+  `OMC_PUSH_KEY_PATH` is set but unusable, or the push fails, log a warning
+  and leave the commit and tag local (never rolled back). Not being in a
+  repo is an error.
 - **Pure Go, single static binary.** Any new dependency must be pure Go.
 
 ## Where things live
@@ -40,7 +44,10 @@ internal/gitops/      PlainOpen detection, StageAll, StagedDiff, Commit,
                       SignedCommit, ResolveIdentity, index→tree writer,
                       LatestSemverTag, NextSemverTag, CreateTag, SignedTag,
                       ValidSemverTag, NormalizeTag, PushToRemote
-internal/sign/        sign.Load(keyPath), signer.Sign(payload) → armored SSH sig
+internal/sign/        sign.Load(keyPath), sign.SecurityKeySigner(keyPath),
+                      signer.Sign(payload) → armored SSH sig; security-key
+                      (FIDO2) detection & agent delegation (sign.DetectKind,
+                      sign.IsSecurityKeyPath, sign.HandleMatches)
 internal/ollama/      Client.Available(), DescribeDetail(), SummarizeTLDR()
 internal/output/      UI: stdout = structured results, stderr = structured diagnostics
 internal/version/     Version string: hardwired semver, overridable via linker -X
@@ -146,7 +153,7 @@ the leading `v` for bare versions.
 
 | Variable            | Meaning                                              | Behavior if set but broken                |
 | ------------------- | ---------------------------------------------------- | ----------------------------------------- |
-| `OMC_SIGN_KEY_PATH` | Path to SSH private key                              | Warn, commit unsigned                     |
+| `OMC_SIGN_KEY_PATH` | Path to SSH private key; security-key handles (`id_ed25519_sk` / `id_ecdsa_sk`) sign via the ssh-agent + smartcard | Warn, commit unsigned                     |
 | `OLLAMA_DESC_URL`   | Base URL of local Ollama REST API                    | Warn and use default `update` subject     |
 | `OLLAMA_DESC_MODEL` | Ollama model name (optional, default `llama3.2`)     | Default used                              |
 | `OMC_NAME`          | Commit author/committer name (optional)              | Falls back to git config, then default    |
@@ -154,7 +161,7 @@ the leading `v` for bare versions.
 | `OMC_SUBJECT`       | Override the commit subject (skips LLM generation)   | Trimmed; see pairing rules above          |
 | `OMC_MESSAGE`       | Override the commit body (skips LLM generation)      | Trimmed; see pairing rules above          |
 | `OMC_TAG`           | Override the tag name (strict semver only)           | Invalid → warn + auto-bump fallback       |
-| `OMC_PUSH_KEY_PATH` | Path to SSH private key for pushing to the remote    | Unreadable/unusable or push fails → warn, leave local |
+| `OMC_PUSH_KEY_PATH` | Path to SSH private key for pushing to the remote; security-key handles authenticate via the ssh-agent | Unreadable/unusable or push fails → warn, leave local |
 
 ## Pushing (OMC_PUSH_KEY_PATH)
 
@@ -162,7 +169,7 @@ After the commit and the semver tag are created, `omc` optionally pushes
 them to the repository's default remote — the go-git equivalent of
 `git push; git push --tags`:
 
-1. `OMC_PUSH_KEY_PATH` must be set **and** the key file readable. If it is
+1. `OMC_PUSH_KEY_PATH` must be set **and** the key readable. If it is
    unset, no push happens. If it is set but unreadable/unparseable, `omc`
    logs a warning and skips the push.
 2. The current branch is pushed first (`refs/heads/<branch>`), then all
@@ -170,16 +177,62 @@ them to the repository's default remote — the go-git equivalent of
 3. The key authenticates over SSH. For non-SSH remotes (https/file) the key
    is not applicable and go-git's default auth is used. When the key path is
    empty, go-git falls back to its default auth (SSH agent).
-4. `NoErrAlreadyUpToDate` is treated as success. Any other failure (no
+4. **Security-key (FIDO2) keys**: a push key path that `sign.IsSecurityKeyPath`
+   recognizes (e.g. `~/.ssh/id_ed25519_sk`) switches to agent-based auth —
+   the ssh-agent offers the matching identity (found via `sign.HandleMatches`
+   against the handle / its `.pub` file) and the smartcard enforces the
+   touch check. When no agent is running or the identity is not loaded, the
+   push is skipped with a warning; the commit and tag stay local.
+5. `NoErrAlreadyUpToDate` is treated as success. Any other failure (no
    remote, non-fast-forward, network) logs a warning and exits 0 — the
    commit and tag are never rolled back over a push problem.
-5. When there is nothing to commit or tag (clean working tree), the push
+6. When there is nothing to commit or tag (clean working tree), the push
    step still runs: a previous run may already have committed and tagged
    locally while its push was skipped or failed, so the pending tags are
    published now. Failures degrade exactly like the main push step.
 
 `gitops.PushToRemote(repo, keyPath)` returns a `PushResult{Remote, Branch,
 Tags}`; `output.UI.PushResult` renders the structured `pushed` record.
+
+## Security keys (FIDO2)
+
+`omc` supports FIDO2 security-key keys (`ssh-keygen -t ed25519-sk` /
+`-t ecdsa-sk`) for both commit/tag signing and pushing. The file
+`~/.ssh/id_ed25519_sk` is **not** a private key: it references a key bound
+to a smartcard or platform authenticator. All of this stays pure Go — no
+PKCS#11, no `ssh-agent` binary, no CGO:
+
+- **Detection** — `sign.IsSecurityKeyPath(path)` recognizes the
+  conventional `id_ed25519_sk` / `id_ecdsa_sk` file names (full path or
+  basename, with suffix tolerance like `_rk`). `sign.DetectKind(path)` refines
+  this by actually probing the file: it parses as a software key
+  (`KindSoftware`), as a security-key handle via the adjacent `.pub` file
+  (`KindSecurityKey`), or as neither (`KindBroken`).
+- **Signing** — `sign.Load` refuses security-key files with
+  `ErrSecurityKeyOnly` (the private half is not on disk). The CLI's
+  `loadSigner` detects the kind first and calls
+  `sign.SecurityKeySigner(keyPath)`: it connects to the ssh-agent via
+  `SSH_AUTH_SOCK` (pure Go, `x/crypto/ssh/agent`), finds the identity whose
+  public blob matches the handle/`.pub` via `sign.HandleMatches`, and
+  returns a signer that delegates every signature to the agent. The
+  authenticator enforces the touch/PIN prompt itself. If the agent is
+  unreachable or does not hold the identity, omc warns and commits unsigned
+  (the usual "always degrade" contract).
+- **Pushing** — a security-key path in `OMC_PUSH_KEY_PATH` builds a
+  `sshpkg.PublicKeysCallback` from the agent's matching signers, so the push
+  authenticates with the device key instead of a file key. No agent → warn
+  and skip the push.
+- **Signature format** — the agent-side signer produces signatures under
+  the `sk-*` algorithm; `Signer.PublicAlgorithm()` reports e.g.
+  `sk-ssh-ed25519@openssh.com` so the structured notices show the actual
+  algorithm. Armored signatures stay byte-compatible with `git commit -S` /
+  `git tag -s` (git accepts them; `git log --show-signature` /
+  `git verify-commit` work).
+- **Limitations** — resident/discoverable or verify-required (-O
+  verify-required) keys cannot be *enforced* by omc; they behave like
+  ordinary sk keys, with whatever user verification the device and agent
+  policy implements. Without `ssh-add`ed identity the security-key paths
+  degrade to unsigned commit / skipped push.
 
 ## Git identity
 

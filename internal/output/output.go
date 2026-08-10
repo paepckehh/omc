@@ -556,6 +556,19 @@ func (u *UI) SigningNotice(keyPath string, enabled bool) {
 	u.emit(u.Err, "OK", "sign", "committing unsigned", F("signed", "false"))
 }
 
+// SecurityKeyModeNotice renders the notice line for security-key (FIDO2)
+// signing through the ssh-agent: signing is enabled, but delegated to the
+// agent and the smartcard (the touch check happens on the device). The
+// signing algorithm, when non-empty, is emitted as a field so users can see
+// the sk-* algorithm in effect.
+func (u *UI) SecurityKeyModeNotice(keyPath, algorithm string) {
+	if algorithm == "" {
+		u.emit(u.Err, "INFO", "sign", "signing commit with ssh-agent security key", F("key", keyPath), F("mode", "smartcard"))
+		return
+	}
+	u.emit(u.Err, "INFO", "sign", "signing commit with ssh-agent security key", F("key", keyPath), F("mode", "smartcard"), F("algo", algorithm))
+}
+
 // PushResult renders the post-push notice to stdout: the remote that was
 // pushed to, the pushed branch (empty on detached HEAD), and whether the
 // tag pass ran. The fields are emitted as separate key=value tokens so

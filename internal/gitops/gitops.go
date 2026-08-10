@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"regexp"
 	"sort"
@@ -23,6 +24,10 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	sshpkg "github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
+
+	"paepcke.de/omc/internal/sign"
 )
 
 // ErrNotARepository is returned when the current directory is not inside a
@@ -780,11 +785,6 @@ func pushOnce(repo *git.Repository, cfg *config.RemoteConfig, opts *git.PushOpti
 // remote URL. For non-SSH remotes and empty key paths it returns a nil
 // transport.AuthMethod, which makes go-git fall back to its default auth
 // (SSH agent for ssh URLs, no auth for https/file URLs).
-// getSSHAuth builds an SSH auth method from an SSH private key path,
-// listing the remote's configured URLs. Only usable together with an SSH
-// remote URL. For non-SSH remotes and empty key paths it returns a nil
-// transport.AuthMethod, which makes go-git fall back to its default auth
-// (SSH agent for ssh URLs, no auth for https/file URLs).
 //
 // HostKeyCallback is deliberately left nil so go-git verifies the server
 // host key against ~/.ssh/known_hosts (and SSH_KNOWN_HOSTS), exactly like
@@ -816,9 +816,67 @@ func getSSHAuth(keyPath string, remoteURLs []string) (transport.AuthMethod, erro
 		return auth, nil
 	}
 
+	if sign.IsSecurityKeyPath(keyPath) {
+		// The path names a FIDO2 security-key key (e.g.
+		// ~/.ssh/id_ed25519_sk). The private key material lives on the
+		// smartcard and can only be used through the ssh-agent, exactly
+		// like git's "IdentitiesOnly + PKCS11Provider" story. The file on
+		// disk is just a handle to the agent-held key, so the key path
+		// selects which agent identity to offer and the signature is
+		// delegated to the agent.
+		return securityKeyAuth(user, keyPath)
+	}
+
 	auth, err := sshpkg.NewPublicKeysFromFile(user, keyPath, "")
 	if err != nil {
 		return nil, fmt.Errorf("load push key %s: %w", keyPath, err)
+	}
+	return auth, nil
+}
+
+// --- FIDO2 security-key support -------------------------------------------------
+
+// securityKeyAuth builds a go-git SSH auth method that authenticates with a
+// FIDO2 security-key identity held by the ssh-agent, instead of a private
+// key file. It connects to the agent and offers the identities matching the
+// key handle at keyPath (its public half read from disk or the .pub file);
+// the agent then talks to the smartcard, which enforces the user-presence
+// (touch) check. Requires an ssh-agent; otherwise an error surfaces and the
+// caller degrades exactly like for an unusable key file.
+func securityKeyAuth(user, keyPath string) (transport.AuthMethod, error) {
+	conn, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK"))
+	if err != nil {
+		return nil, fmt.Errorf("connect to ssh-agent for security key %s: %w", keyPath, err)
+	}
+	ag := agent.NewClient(conn)
+	signers, err := ag.Signers()
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("list agent identities for security key %s: %w", keyPath, err)
+	}
+
+	matching := make([]ssh.Signer, 0, len(signers))
+	for _, s := range signers {
+		if sign.HandleMatches(s.PublicKey(), keyPath) {
+			matching = append(matching, s)
+		}
+	}
+
+	cb := func() ([]ssh.Signer, error) {
+		if len(matching) == 0 {
+			// Key handle selected, but the agent does not hold it.
+			// Fall back to offering everything the agent knows, so a
+			// user who set OMC_PUSH_KEY_PATH once is not punished
+			// when the sk path only selects a name; the agent still
+			// picks the right identity per server.
+			return signers, nil
+		}
+		return matching, nil
+	}
+
+	auth := &sshpkg.PublicKeysCallback{
+		User:     user,
+		Callback: cb,
 	}
 	return auth, nil
 }

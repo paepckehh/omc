@@ -50,6 +50,8 @@ Repository discovery, `git add -A`, unified diffs, commit creation, and annotate
 ### 🔑 SSH-signed commits
 Point `OMC_SIGN_KEY_PATH` at an SSH private key and the commit carries an armored `BEGIN SSH SIGNATURE` header, byte-compatible with `git commit -S`. `git log --show-signature` and `git verify-commit` confirm it.
 
+**Smartcard (FIDO2) keys** — `id_ed25519_sk` / `id_ecdsa_sk` from `ssh-keygen -t ed25519-sk` — are supported too: point `OMC_SIGN_KEY_PATH` at the key handle and omc signs through your **ssh-agent** (the agent talks to the device, which enforces the touch/PIN). No agent loaded with the key → omc warns and commits unsigned; it never blocks.
+
 </td>
 <td width="50%" valign="top">
 
@@ -97,6 +99,8 @@ No flags to remember, no prompts to answer. Run it twice, get two commits and tw
 
 ### 🚀 Optional push
 Set `OMC_PUSH_KEY_PATH` to an SSH key and `omc` pushes the new commit and its tag to the default remote after tagging — `git push; git push --tags`, all in-process via go-git. Failures degrade: the commit and tag stay local, never rolled back. When the working tree is clean, the push still runs so tags left behind by a previously failed push get published.
+
+Like signing, the push key accepts a **FIDO2 security-key handle** (`~/.ssh/id_ed25519_sk`): omc authenticates via the ssh-agent and your smartcard (touch when prompted). Without an agent the push degrades to a warning.
 
 </td>
 </tr>
@@ -347,7 +351,7 @@ omc
 
 | Variable | Effect |
 | -------- | ------ |
-| `OMC_SIGN_KEY_PATH` | Path to an SSH **private** key. When set and valid, the commit is SSH-signed. If set but unusable, warns and commits unsigned. |
+| `OMC_SIGN_KEY_PATH` | Path to an SSH **private** key. When set and valid, the commit is SSH-signed. A **FIDO2 security-key handle** (`id_ed25519_sk` / `id_ecdsa_sk`) is supported too: omc signs via the ssh-agent and your smartcard. If set but unusable, warns and commits unsigned. |
 | `OLLAMA_DESC_URL` | Base URL of a local Ollama REST API, e.g. `http://127.0.0.1:11434`. When set and reachable, generates the commit message from the staged diff. |
 | `OLLAMA_DESC_MODEL` | Ollama model name (optional). Defaults to `llama3.2`. |
 | `OMC_NAME` | Commit author/committer name (optional). Falls back to git config, then `OMC, Git Commiter`. |
@@ -355,12 +359,14 @@ omc
 | `OMC_SUBJECT` | Override the commit subject. When set, **no LLM generation runs**. See [Message & tag overrides](#-message--tag-overrides). |
 | `OMC_MESSAGE` | Override the commit body. When set, **no LLM generation runs**. See [Message & tag overrides](#-message--tag-overrides). |
 | `OMC_TAG` | Override the tag name. Used only when it is strict semver `vMAJOR.MINOR.PATCH`; otherwise the auto-bump runs. See [Message & tag overrides](#-message--tag-overrides). |
-| `OMC_PUSH_KEY_PATH` | Path to an SSH **private** key. When set and readable, pushes the new commit and tags to the default remote after tagging (`git push; git push --tags`). If set but unusable, or the push fails, warns and leaves the commit/tag local. |
+| `OMC_PUSH_KEY_PATH` | Path to an SSH **private** key. When set and readable, pushes the new commit and tags to the default remote after tagging (`git push; git push --tags`). A **FIDO2 security-key handle** is supported (auth via ssh-agent + smartcard). If set but unusable, or the push fails, warns and leaves the commit/tag local. |
 
-> **Signing:** only passphrase-less keys are supported (there is no interactive
-> prompt, by design). `ssh-keygen -t ed25519 -N "" -C agent@paepcke.de -f ~/.ssh/agent`
+> **Signing:** only passphrase-less software keys are supported (there is no
+> interactive prompt, by design). `ssh-keygen -t ed25519 -N "" -C agent@paepcke.de -f ~/.ssh/agent`
 > is your friend. Scheduling note for CI: protect that key with filesystem
-> permissions and rotate it like any credential.
+> permissions and rotate it like any credential. For **smartcard keys** you
+> need your ssh-agent running and the key loaded (`ssh-add ~/.ssh/id_ed25519_sk`);
+> the device then enforces the touch/PIN prompt itself.
 
 <details>
 <summary><b>🤖 AI message flow — how the commit body is generated</b></summary>
@@ -483,7 +489,7 @@ After the commit and the semver tag are created, `omc` can push them to the
 repository's default remote — the go-git equivalent of `git push; git push
 --tags`, with no external `git` binary.
 
-1. `OMC_PUSH_KEY_PATH` must be set **and** the key file readable. If it is
+1. `OMC_PUSH_KEY_PATH` must be set **and** the key readable. If it is
    unset, no push happens. If it is set but unreadable/unparseable, `omc`
    logs a warning and skips the push.
 2. The current branch is pushed first (`refs/heads/<branch>`), then all
@@ -491,10 +497,16 @@ repository's default remote — the go-git equivalent of `git push; git push
 3. The key authenticates over SSH. For non-SSH remotes (https/file) the key
    is not applicable and go-git's default auth is used. When the key path
    is empty, go-git falls back to its default auth (SSH agent).
-4. `NoErrAlreadyUpToDate` is treated as success. Any other failure (no
+4. **Security-key (FIDO2) keys** work too: `OMC_PUSH_KEY_PATH=~/.ssh/id_ed25519_sk`
+   is detected (by the conventional `id_*_sk` name and/or the `.pub`
+   adjacent file) and authentication is delegated to the ssh-agent, which
+   forwards the challenge to your smartcard — the same way `git push` with
+   `IdentitiesOnly` + a security key works. If the agent is missing or does
+   not hold the key, the push is skipped with a warning.
+5. `NoErrAlreadyUpToDate` is treated as success. Any other failure (no
    remote, non-fast-forward, network) logs a warning and exits 0 — the
    commit and tag are never rolled back over a push problem.
-5. The push also runs when there is nothing to commit or tag (clean
+6. The push also runs when there is nothing to commit or tag (clean
    working tree): a previous run may already have committed and tagged
    locally while its push was skipped or failed, so the pending tags are
    published now. Failures degrade exactly like the main push step.
