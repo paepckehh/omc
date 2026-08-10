@@ -15,7 +15,7 @@ import (
 	"github.com/hiddeco/sshsig"
 	"golang.org/x/crypto/ssh"
 
-	"paepcke.de/ocommit/internal/sign"
+	"paepcke.de/omc/internal/sign"
 )
 
 // TestSignedTagDelayForcesTimestampSplit verifies that the signature in a

@@ -14,7 +14,7 @@ import (
 	"github.com/hiddeco/sshsig"
 	"golang.org/x/crypto/ssh"
 
-	"paepcke.de/ocommit/internal/sign"
+	"paepcke.de/omc/internal/sign"
 )
 
 // TestSignedCommitViaSignLoad uses the real sign.Load path (the production

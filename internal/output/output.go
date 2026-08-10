@@ -1,18 +1,18 @@
-// Package output centralizes all user-facing formatting for ocommit.
+// Package output centralizes all user-facing formatting for omc.
 //
 // It renders a structured, timestamped terminal UI built on charmbracelet
 // bubbles + lipgloss. Every line emitted — diagnostics, progress, and final
 // results — is a structured log record of the form:
 //
-//	<HH:MM:SS> <LEVEL> ocommit [<step>] <message> [key=value ...]
+//	<HH:MM:SS> <LEVEL> omc [<step>] <message> [key=value ...]
 //
 // Examples (plain, non-TTY form):
 //
-//	12:04:07 INFO  ocommit open   detecting repository
-//	12:04:07 OK    ocommit stage  done
-//	12:04:08 WARN  ocommit        ssh key unusable  key=/x err="nope"
-//	12:04:09 OK    ocommit commit committed     hash=9d3f2ab signed=true
-//	12:04:09 OK    ocommit tag    tagged         tag=v0.0.3 hash=9d3f2ab signed=true
+//	12:04:07 INFO  omc open   detecting repository
+//	12:04:07 OK    omc stage  done
+//	12:04:08 WARN  omc        ssh key unusable  key=/x err="nope"
+//	12:04:09 OK    omc commit committed     hash=9d3f2ab signed=true
+//	12:04:09 OK    omc tag    tagged         tag=v0.0.3 hash=9d3f2ab signed=true
 //
 // When stderr is a terminal the same records are rendered with color, icons,
 // aligned columns, and a gradient progress bar for the two-stage LLM
@@ -21,7 +21,7 @@
 // carries program output.
 //
 // When stderr is not a terminal (piped output, captured tests, CI logs) the
-// colored rendering is suppressed and ocommit falls back to the plain
+// colored rendering is suppressed and omc falls back to the plain
 // structured line format so the output stays greppable and deterministic.
 package output
 
@@ -40,7 +40,7 @@ import (
 )
 
 // Brand is the application label shown in every structured log line.
-const Brand = "ocommit"
+const Brand = "omc"
 
 // palette holds the lipgloss colors used across the UI.
 var palette = struct {
@@ -211,7 +211,7 @@ func (u *UI) renderFields(fields []Field) string {
 // emit writes a structured log record to w. level is one of OK/INFO/WARN/FAIL.
 // step is the pipeline step name (may be empty); msg is the human message;
 // fields are optional key=value pairs. The record always carries a leading
-// timestamp and the brand name so consumers can grep on "ocommit" regardless
+// timestamp and the brand name so consumers can grep on "omc" regardless
 // of TTY mode.
 func (u *UI) emit(w io.Writer, level, step, msg string, fields ...Field) {
 	ts := now()

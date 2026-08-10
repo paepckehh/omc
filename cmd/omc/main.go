@@ -1,30 +1,30 @@
-// Command ocommit is a plain, stupid-simple git commit helper. It takes no
+// Command omc is a plain, stupid-simple git commit helper. It takes no
 // command line arguments at all: every behavior is controlled by
 // environment variables.
 //
 // Behaviors (all opt-in via env):
 //
-//	OCOMMIT_KEY_PATH   path to an SSH private key; if set and valid, the
+//	OMC_SIGN_KEY_PATH   path to an SSH private key; if set and valid, the
 //	                   commit is signed with it (git's SSH signing format).
-//	                   If set but unusable, ocommit logs a warning and
+//	                   If set but unusable, omc logs a warning and
 //	                   commits unsigned.
-//	OCOMMIT_NAME       commit author/committer name; falls back to git
-//	                   config, then "OCOMMIT, Git Commiter"
-//	OCOMMIT_EMAIL      commit author/committer email; falls back to git
-//	                   config, then "git@ocommit.local"
+//	OMC_NAME       commit author/committer name; falls back to git
+//	                   config, then "OMC, Git Commiter"
+//	OMC_EMAIL      commit author/committer email; falls back to git
+//	                   config, then "git@omc.local"
 //	OLLAMA_DESC_URL    base URL of a local Ollama REST API; if set and
 //	                   reachable, the staged diff is turned into an LLM
 //	                   commit message (detailed body + TL;DR subject)
 //	OLLAMA_DESC_MODEL  Ollama model name; optional, defaults to llama3.2
-//	OCOMMIT_SUBJECT    override the commit subject; skips LLM generation.
+//	OMC_SUBJECT    override the commit subject; skips LLM generation.
 //	                   See AGENTS.md for the subject/message pairing rules.
-//	OCOMMIT_MESSAGE    override the commit body; skips LLM generation.
+//	OMC_MESSAGE    override the commit body; skips LLM generation.
 //	                   See AGENTS.md for the subject/message pairing rules.
-//	OCOMMIT_TAG        override the tag name; used only when it parses as
+//	OMC_TAG        override the tag name; used only when it parses as
 //	                   strict semver vMAJOR.MINOR.PATCH, otherwise the
 //	                   normal auto-bump path runs.
 //
-// ocommit runs inside a git repository and performs the equivalent of
+// omc runs inside a git repository and performs the equivalent of
 //
 //	git add -A && git commit && git log
 package main
@@ -35,12 +35,12 @@ import (
 	"strings"
 	"time"
 
-	"paepcke.de/ocommit/internal/config"
-	"paepcke.de/ocommit/internal/gitops"
-	"paepcke.de/ocommit/internal/ollama"
-	"paepcke.de/ocommit/internal/output"
-	"paepcke.de/ocommit/internal/sign"
-	"paepcke.de/ocommit/internal/version"
+	"paepcke.de/omc/internal/config"
+	"paepcke.de/omc/internal/gitops"
+	"paepcke.de/omc/internal/ollama"
+	"paepcke.de/omc/internal/output"
+	"paepcke.de/omc/internal/sign"
+	"paepcke.de/omc/internal/version"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -108,13 +108,13 @@ func run() int {
 	defer cancel()
 
 	// 4. Resolve the commit message. Environment overrides
-	// (OCOMMIT_SUBJECT / OCOMMIT_MESSAGE) win over LLM generation: when
+	// (OMC_SUBJECT / OMC_MESSAGE) win over LLM generation: when
 	// either is set, no Ollama call is made. See AGENTS.md for the
 	// pairing rules.
 	msg := gitops.CommitMessage{Subject: "update"}
 	if override, ok := overrideMessage(cfg); ok {
 		msg = override
-		ui.Info("message override active (OCOMMIT_SUBJECT/OCOMMIT_MESSAGE)")
+		ui.Info("message override active (OMC_SUBJECT/OMC_MESSAGE)")
 	} else if cfg.OllamaURL != "" {
 		client := ollama.New(cfg.OllamaURL, cfg.OllamaModel)
 		if reachable := ollamaReachable(ui, ctx, client, cfg.OllamaURL); reachable {
@@ -190,7 +190,7 @@ func run() int {
 	if err := ui.Step("tag", tagStepLabel(cfg), func() error {
 		name, skipped, terr := resolveTagName(repo, cfg)
 		if skipped {
-			ui.Warn("OCOMMIT_TAG %q is not strict semver (vMAJOR.MINOR.PATCH); falling back to auto-bump", cfg.Tag)
+			ui.Warn("OMC_TAG %q is not strict semver (vMAJOR.MINOR.PATCH); falling back to auto-bump", cfg.Tag)
 		}
 		if terr != nil {
 			return terr
@@ -213,15 +213,15 @@ func run() int {
 	return 0
 }
 
-// resolveTagName decides the tag name for the new commit. When OCOMMIT_TAG
+// resolveTagName decides the tag name for the new commit. When OMC_TAG
 // is set and parses as strict semver it is normalized (a leading "v" is added
 // for bare "0.1.2") and used verbatim; otherwise the normal patch-bump path
 // runs. An invalid override is logged as a warning so the user knows the
 // override was ignored rather than silently dropped.
-// resolveTagName decides the tag name for the new commit. When OCOMMIT_TAG
+// resolveTagName decides the tag name for the new commit. When OMC_TAG
 // is set and parses as strict semver it is normalized (a leading "v" is added
 // for bare "0.1.2") and used verbatim; otherwise the normal patch-bump path
-// runs. The returned overrideSkipped flag is true when OCOMMIT_TAG was set
+// runs. The returned overrideSkipped flag is true when OMC_TAG was set
 // but rejected, so the caller can warn once without re-checking validity.
 func resolveTagName(repo *git.Repository, cfg config.Config) (name string, overrideSkipped bool, err error) {
 	if cfg.Tag != "" {
@@ -245,17 +245,17 @@ func tagStepLabel(cfg config.Config) string {
 	return "bumping semver patch"
 }
 
-// overrideMessage resolves the commit message from the OCOMMIT_SUBJECT and
-// OCOMMIT_MESSAGE environment overrides. It returns the message and true
+// overrideMessage resolves the commit message from the OMC_SUBJECT and
+// OMC_MESSAGE environment overrides. It returns the message and true
 // when an override is active (either variable set); false means the caller
 // should fall back to LLM generation / the default subject.
 //
 // Pairing rules:
-//   - both set:   subject = OCOMMIT_SUBJECT, body = OCOMMIT_MESSAGE.
-//   - subject only: subject = OCOMMIT_SUBJECT, body = OCOMMIT_SUBJECT
+//   - both set:   subject = OMC_SUBJECT, body = OMC_MESSAGE.
+//   - subject only: subject = OMC_SUBJECT, body = OMC_SUBJECT
 //     (the subject stands in for the body).
-//   - message only: subject = first line of OCOMMIT_MESSAGE (shortened),
-//     body = full OCOMMIT_MESSAGE.
+//   - message only: subject = first line of OMC_MESSAGE (shortened),
+//     body = full OMC_MESSAGE.
 func overrideMessage(cfg config.Config) (gitops.CommitMessage, bool) {
 	subject := strings.TrimSpace(cfg.Subject)
 	body := strings.TrimSpace(cfg.Message)

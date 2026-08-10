@@ -14,7 +14,7 @@ import (
 	"github.com/hiddeco/sshsig"
 	"golang.org/x/crypto/ssh"
 
-	"paepcke.de/ocommit/internal/sign"
+	"paepcke.de/omc/internal/sign"
 )
 
 // initTestRepo creates a fresh git repository in a temp dir with a configured
@@ -187,8 +187,8 @@ func TestResolveIdentityPriority(t *testing.T) {
 	}
 
 	t.Run("oconfig env wins", func(t *testing.T) {
-		t.Setenv("OCOMMIT_NAME", "Env User")
-		t.Setenv("OCOMMIT_EMAIL", "env@example.com")
+		t.Setenv("OMC_NAME", "Env User")
+		t.Setenv("OMC_EMAIL", "env@example.com")
 		t.Setenv("GIT_AUTHOR_NAME", "")
 		t.Setenv("GIT_AUTHOR_EMAIL", "")
 		t.Setenv("GIT_COMMITTER_NAME", "")
@@ -200,8 +200,8 @@ func TestResolveIdentityPriority(t *testing.T) {
 	})
 
 	t.Run("git author env wins over config", func(t *testing.T) {
-		t.Setenv("OCOMMIT_NAME", "")
-		t.Setenv("OCOMMIT_EMAIL", "")
+		t.Setenv("OMC_NAME", "")
+		t.Setenv("OMC_EMAIL", "")
 		t.Setenv("GIT_AUTHOR_NAME", "Git Author")
 		t.Setenv("GIT_AUTHOR_EMAIL", "author@example.com")
 		id := ResolveIdentity(repo)
@@ -211,8 +211,8 @@ func TestResolveIdentityPriority(t *testing.T) {
 	})
 
 	t.Run("repo config fallback", func(t *testing.T) {
-		t.Setenv("OCOMMIT_NAME", "")
-		t.Setenv("OCOMMIT_EMAIL", "")
+		t.Setenv("OMC_NAME", "")
+		t.Setenv("OMC_EMAIL", "")
 		t.Setenv("GIT_AUTHOR_NAME", "")
 		t.Setenv("GIT_AUTHOR_EMAIL", "")
 		t.Setenv("GIT_COMMITTER_NAME", "")
@@ -224,8 +224,8 @@ func TestResolveIdentityPriority(t *testing.T) {
 	})
 
 	t.Run("defaults without config", func(t *testing.T) {
-		t.Setenv("OCOMMIT_NAME", "")
-		t.Setenv("OCOMMIT_EMAIL", "")
+		t.Setenv("OMC_NAME", "")
+		t.Setenv("OMC_EMAIL", "")
 		t.Setenv("GIT_AUTHOR_NAME", "")
 		t.Setenv("GIT_AUTHOR_EMAIL", "")
 		t.Setenv("GIT_COMMITTER_NAME", "")

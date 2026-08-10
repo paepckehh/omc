@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"paepcke.de/ocommit/internal/config"
-	"paepcke.de/ocommit/internal/gitops"
+	"paepcke.de/omc/internal/config"
+	"paepcke.de/omc/internal/gitops"
 )
 
 func TestOverrideMessageNone(t *testing.T) {

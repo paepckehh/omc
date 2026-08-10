@@ -1,4 +1,4 @@
-// Package ollama implements the optional LLM step of ocommit. When
+// Package ollama implements the optional LLM step of omc. When
 // OLLAMA_DESC_URL points at a reachable local Ollama REST API, the staged
 // diff is sent twice: once to generate a detailed commit description, then
 // the description itself is condensed into a TL;DR summary.

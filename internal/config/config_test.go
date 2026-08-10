@@ -7,11 +7,11 @@ import (
 )
 
 func TestFromEnv(t *testing.T) {
-	t.Setenv("OCOMMIT_KEY_PATH", "/keys/id_ed25519")
+	t.Setenv("OMC_SIGN_KEY_PATH", "/keys/id_ed25519")
 	t.Setenv("OLLAMA_DESC_URL", "http://127.0.0.1:11434")
 	t.Setenv("OLLAMA_DESC_MODEL", "qwen2.5:7b")
-	t.Setenv("OCOMMIT_NAME", "Jane Doe")
-	t.Setenv("OCOMMIT_EMAIL", "jane@example.com")
+	t.Setenv("OMC_NAME", "Jane Doe")
+	t.Setenv("OMC_EMAIL", "jane@example.com")
 
 	c := FromEnv()
 	if c.KeyPath != "/keys/id_ed25519" {
@@ -32,11 +32,11 @@ func TestFromEnv(t *testing.T) {
 }
 
 func TestFromEnvEmpty(t *testing.T) {
-	t.Setenv("OCOMMIT_KEY_PATH", "")
+	t.Setenv("OMC_SIGN_KEY_PATH", "")
 	t.Setenv("OLLAMA_DESC_URL", "")
 	t.Setenv("OLLAMA_DESC_MODEL", "")
-	t.Setenv("OCOMMIT_NAME", "")
-	t.Setenv("OCOMMIT_EMAIL", "")
+	t.Setenv("OMC_NAME", "")
+	t.Setenv("OMC_EMAIL", "")
 
 	c := FromEnv()
 	if c.KeyPath != "" || c.OllamaURL != "" || c.OllamaModel != "" || c.Name != "" || c.Email != "" {
@@ -76,7 +76,7 @@ func TestFromEnvKeyPathTildeExpanded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UserHomeDir: %v", err)
 	}
-	t.Setenv("OCOMMIT_KEY_PATH", "~/.ssh/agent")
+	t.Setenv("OMC_SIGN_KEY_PATH", "~/.ssh/agent")
 	c := FromEnv()
 	want := home + "/.ssh/agent"
 	if c.KeyPath != want {
@@ -88,9 +88,9 @@ func TestFromEnvKeyPathTildeExpanded(t *testing.T) {
 }
 
 func TestFromEnvOverrides(t *testing.T) {
-	t.Setenv("OCOMMIT_SUBJECT", "feat: add overrides")
-	t.Setenv("OCOMMIT_MESSAGE", "detailed body\nspanning lines")
-	t.Setenv("OCOMMIT_TAG", "v1.2.3")
+	t.Setenv("OMC_SUBJECT", "feat: add overrides")
+	t.Setenv("OMC_MESSAGE", "detailed body\nspanning lines")
+	t.Setenv("OMC_TAG", "v1.2.3")
 
 	c := FromEnv()
 	if c.Subject != "feat: add overrides" {
@@ -105,9 +105,9 @@ func TestFromEnvOverrides(t *testing.T) {
 }
 
 func TestFromEnvOverridesEmpty(t *testing.T) {
-	t.Setenv("OCOMMIT_SUBJECT", "")
-	t.Setenv("OCOMMIT_MESSAGE", "")
-	t.Setenv("OCOMMIT_TAG", "")
+	t.Setenv("OMC_SUBJECT", "")
+	t.Setenv("OMC_MESSAGE", "")
+	t.Setenv("OMC_TAG", "")
 
 	c := FromEnv()
 	if c.Subject != "" || c.Message != "" || c.Tag != "" {

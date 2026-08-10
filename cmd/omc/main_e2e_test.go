@@ -14,7 +14,7 @@ func TestMainEndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping binary e2e in short mode")
 	}
-	bin := filepath.Join(t.TempDir(), "ocommit")
+	bin := filepath.Join(t.TempDir(), "omc")
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
@@ -51,7 +51,7 @@ func TestMainEndToEnd(t *testing.T) {
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("ocommit failed: %v\n%s", err, out)
+		t.Fatalf("omc failed: %v\n%s", err, out)
 	}
 	if !strings.Contains(string(out), "committed") {
 		t.Errorf("output missing result: %s", out)
@@ -118,7 +118,7 @@ func TestMainEndToEndMissingKey(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping binary e2e in short mode")
 	}
-	bin := filepath.Join(t.TempDir(), "ocommit")
+	bin := filepath.Join(t.TempDir(), "omc")
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
@@ -142,13 +142,13 @@ func TestMainEndToEndMissingKey(t *testing.T) {
 	cmd := exec.Command(bin)
 	cmd.Dir = repoDir
 	cmd.Env = append(os.Environ(),
-		"OCOMMIT_KEY_PATH="+filepath.Join(dir, "does-not-exist"),
-		"OCOMMIT_NAME=E2E User",
-		"OCOMMIT_EMAIL=e2e@example.com",
+		"OMC_SIGN_KEY_PATH="+filepath.Join(dir, "does-not-exist"),
+		"OMC_NAME=E2E User",
+		"OMC_EMAIL=e2e@example.com",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("ocommit failed with missing key: %v\n%s", err, out)
+		t.Fatalf("omc failed with missing key: %v\n%s", err, out)
 	}
 	if !strings.Contains(string(out), "warning") {
 		t.Errorf("output missing degradation warning: %s", out)
@@ -166,14 +166,14 @@ func TestMainEndToEndMissingKey(t *testing.T) {
 	}
 }
 
-// TestMainEndToEndOverrides verifies that OCOMMIT_SUBJECT, OCOMMIT_MESSAGE
-// and a valid OCOMMIT_TAG override the generated message and tag, and that
+// TestMainEndToEndOverrides verifies that OMC_SUBJECT, OMC_MESSAGE
+// and a valid OMC_TAG override the generated message and tag, and that
 // no Ollama call is attempted (the override message lands verbatim).
 func TestMainEndToEndOverrides(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping binary e2e in short mode")
 	}
-	bin := filepath.Join(t.TempDir(), "ocommit")
+	bin := filepath.Join(t.TempDir(), "omc")
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
@@ -203,15 +203,15 @@ func TestMainEndToEndOverrides(t *testing.T) {
 	cmd := exec.Command(bin)
 	cmd.Dir = repoDir
 	cmd.Env = append(os.Environ(),
-		"OCOMMIT_SUBJECT=feat: override subject",
-		"OCOMMIT_MESSAGE=multi\nline\nbody",
-		"OCOMMIT_TAG=v3.2.1",
-		"OCOMMIT_NAME=E2E User",
-		"OCOMMIT_EMAIL=e2e@example.com",
+		"OMC_SUBJECT=feat: override subject",
+		"OMC_MESSAGE=multi\nline\nbody",
+		"OMC_TAG=v3.2.1",
+		"OMC_NAME=E2E User",
+		"OMC_EMAIL=e2e@example.com",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("ocommit failed: %v\n%s", err, out)
+		t.Fatalf("omc failed: %v\n%s", err, out)
 	}
 	if !strings.Contains(string(out), "override subject") {
 		t.Errorf("output missing override subject: %s", out)
@@ -251,13 +251,13 @@ func TestMainEndToEndOverrides(t *testing.T) {
 	}
 }
 
-// TestMainEndToEndSubjectOnly verifies that OCOMMIT_SUBJECT alone is used for
+// TestMainEndToEndSubjectOnly verifies that OMC_SUBJECT alone is used for
 // both subject and body.
 func TestMainEndToEndSubjectOnly(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping binary e2e in short mode")
 	}
-	bin := filepath.Join(t.TempDir(), "ocommit")
+	bin := filepath.Join(t.TempDir(), "omc")
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
@@ -287,14 +287,14 @@ func TestMainEndToEndSubjectOnly(t *testing.T) {
 	cmd := exec.Command(bin)
 	cmd.Dir = repoDir
 	cmd.Env = append(os.Environ(),
-		"OCOMMIT_SUBJECT=solo subject",
+		"OMC_SUBJECT=solo subject",
 		"GIT_AUTHOR_NAME=E2E User",
 		"GIT_AUTHOR_EMAIL=e2e@example.com",
 		"GIT_COMMITTER_NAME=E2E User",
 		"GIT_COMMITTER_EMAIL=e2e@example.com",
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("ocommit failed: %v\n%s", err, out)
+		t.Fatalf("omc failed: %v\n%s", err, out)
 	}
 
 	show := exec.Command("git", "show", "-s", "--format=%s", "HEAD")
@@ -305,7 +305,7 @@ func TestMainEndToEndSubjectOnly(t *testing.T) {
 		t.Errorf("subject = %q, want solo subject", got)
 	}
 
-	// Body must equal the subject when only OCOMMIT_SUBJECT is set.
+	// Body must equal the subject when only OMC_SUBJECT is set.
 	body := exec.Command("git", "show", "-s", "--format=%b", "HEAD")
 	body.Dir = repoDir
 	if b, err := body.CombinedOutput(); err != nil {
@@ -315,13 +315,13 @@ func TestMainEndToEndSubjectOnly(t *testing.T) {
 	}
 }
 
-// TestMainEndToEndMessageOnly verifies that OCOMMIT_MESSAGE alone is used as
+// TestMainEndToEndMessageOnly verifies that OMC_MESSAGE alone is used as
 // the body, with its first line shortened into the subject.
 func TestMainEndToEndMessageOnly(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping binary e2e in short mode")
 	}
-	bin := filepath.Join(t.TempDir(), "ocommit")
+	bin := filepath.Join(t.TempDir(), "omc")
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
@@ -351,14 +351,14 @@ func TestMainEndToEndMessageOnly(t *testing.T) {
 	cmd := exec.Command(bin)
 	cmd.Dir = repoDir
 	cmd.Env = append(os.Environ(),
-		"OCOMMIT_MESSAGE=first line of body\nsecond line of body",
+		"OMC_MESSAGE=first line of body\nsecond line of body",
 		"GIT_AUTHOR_NAME=E2E User",
 		"GIT_AUTHOR_EMAIL=e2e@example.com",
 		"GIT_COMMITTER_NAME=E2E User",
 		"GIT_COMMITTER_EMAIL=e2e@example.com",
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("ocommit failed: %v\n%s", err, out)
+		t.Fatalf("omc failed: %v\n%s", err, out)
 	}
 
 	show := exec.Command("git", "show", "-s", "--format=%s", "HEAD")
@@ -378,14 +378,14 @@ func TestMainEndToEndMessageOnly(t *testing.T) {
 	}
 }
 
-// TestMainEndToEndInvalidTagOverride verifies that an OCOMMIT_TAG that does
+// TestMainEndToEndInvalidTagOverride verifies that an OMC_TAG that does
 // not parse as strict semver is ignored and the normal auto-bump path runs
 // (v0.0.1 on a fresh repo).
 func TestMainEndToEndInvalidTagOverride(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping binary e2e in short mode")
 	}
-	bin := filepath.Join(t.TempDir(), "ocommit")
+	bin := filepath.Join(t.TempDir(), "omc")
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
@@ -415,7 +415,7 @@ func TestMainEndToEndInvalidTagOverride(t *testing.T) {
 	cmd := exec.Command(bin)
 	cmd.Dir = repoDir
 	cmd.Env = append(os.Environ(),
-		"OCOMMIT_TAG=not-semver",
+		"OMC_TAG=not-semver",
 		"GIT_AUTHOR_NAME=E2E User",
 		"GIT_AUTHOR_EMAIL=e2e@example.com",
 		"GIT_COMMITTER_NAME=E2E User",
@@ -423,7 +423,7 @@ func TestMainEndToEndInvalidTagOverride(t *testing.T) {
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("ocommit failed: %v\n%s", err, out)
+		t.Fatalf("omc failed: %v\n%s", err, out)
 	}
 	if !strings.Contains(string(out), "warning") {
 		t.Errorf("output missing invalid-tag warning: %s", out)
@@ -442,12 +442,12 @@ func TestMainEndToEndInvalidTagOverride(t *testing.T) {
 }
 
 // TestMainEndToEndCleanTree verifies that when there is nothing to commit,
-// ocommit informs the user and exits 0 without creating a commit.
+// omc informs the user and exits 0 without creating a commit.
 func TestMainEndToEndCleanTree(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping binary e2e in short mode")
 	}
-	bin := filepath.Join(t.TempDir(), "ocommit")
+	bin := filepath.Join(t.TempDir(), "omc")
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
@@ -492,7 +492,7 @@ func TestMainEndToEndCleanTree(t *testing.T) {
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("ocommit failed on clean tree: %v\n%s", err, out)
+		t.Fatalf("omc failed on clean tree: %v\n%s", err, out)
 	}
 	if !strings.Contains(string(out), "nothing to commit") {
 		t.Errorf("output missing clean-tree notice: %s", out)

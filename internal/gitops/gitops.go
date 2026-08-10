@@ -1,4 +1,4 @@
-// Package gitops implements the git operations behind ocommit: repository
+// Package gitops implements the git operations behind omc: repository
 // detection, staging, diffs, committing and history output. All of it is
 // done through the go-git library, so the tool has no runtime dependency on
 // a git executable.
@@ -119,8 +119,8 @@ type CommitMessage struct {
 
 // defaults for the commit identity when nothing else is configured.
 const (
-	DefaultName  = "OCOMMIT, Git Commiter"
-	DefaultEmail = "git@ocommit.local"
+	DefaultName  = "OMC, Git Commiter"
+	DefaultEmail = "git@omc.local"
 )
 
 // Identity is the resolved author/committer for a commit.
@@ -129,16 +129,16 @@ type Identity struct {
 	Email string
 }
 
-// ResolveIdentity returns the commit identity: OCOMMIT_NAME/OCOMMIT_EMAIL
+// ResolveIdentity returns the commit identity: OMC_NAME/OMC_EMAIL
 // first, then the standard GIT_AUTHOR_*/GIT_COMMITTER_* variables, then the
 // repository's git config, and finally the built-in defaults.
-// ResolveIdentity returns the commit identity: OCOMMIT_NAME/OCOMMIT_EMAIL
+// ResolveIdentity returns the commit identity: OMC_NAME/OMC_EMAIL
 // first, then the standard GIT_AUTHOR_*/GIT_COMMITTER_* variables, then the
 // repository's git config, and finally the built-in defaults.
 func ResolveIdentity(repo *git.Repository) Identity {
 	sig := Identity{Name: DefaultName, Email: DefaultEmail}
-	nameEnv := envOr("OCOMMIT_NAME", "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME")
-	emailEnv := envOr("OCOMMIT_EMAIL", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL")
+	nameEnv := envOr("OMC_NAME", "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME")
+	emailEnv := envOr("OMC_EMAIL", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL")
 	if nameEnv != "" {
 		sig.Name = nameEnv
 	}

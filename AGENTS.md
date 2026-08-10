@@ -1,12 +1,12 @@
 # AGENTS.md
 
-Guidance for human and AI agents working on the `ocommit` codebase.
+Guidance for human and AI agents working on the `omc` codebase.
 
 ## Project
 
-`ocommit` is a plain, stupid-simple git commit utility written in pure Go.
-It takes **no command line arguments**: every behavior is controlled by
-environment variables.
+`omc` (spoken: *"oh-my-commit"*) is a plain, stupid-simple git commit
+utility written in pure Go. It takes **no command line arguments**: every
+behavior is controlled by environment variables.
 
 Core promise: inside a git working tree it performs the equivalent of
 `git add -A && git commit -asm update` — with optional SSH commit
@@ -16,9 +16,9 @@ instance. Every line of output is a structured, timestamped log record.
 ## Hard constraints
 
 - **No CLI flags.** All configuration comes from the environment:
-  `OCOMMIT_KEY_PATH`, `OLLAMA_DESC_URL`, `OLLAMA_DESC_MODEL`,
-  `OCOMMIT_NAME`, `OCOMMIT_EMAIL`, `OCOMMIT_SUBJECT`, `OCOMMIT_MESSAGE`,
-  `OCOMMIT_TAG`.
+  `OMC_SIGN_KEY_PATH`, `OLLAMA_DESC_URL`, `OLLAMA_DESC_MODEL`,
+  `OMC_NAME`, `OMC_EMAIL`, `OMC_SUBJECT`, `OMC_MESSAGE`,
+  `OMC_TAG`.
 - **No runtime dependency on external binaries.** No `git`, no `ssh-keygen`.
   Everything uses libraries: `github.com/go-git/go-git/v5` for repository
   operations, `github.com/hiddeco/sshsig` + `golang.org/x/crypto/ssh` for
@@ -32,7 +32,7 @@ instance. Every line of output is a structured, timestamped log record.
 ## Where things live
 
 ```
-cmd/ocommit/main.go   pipeline: repo → stage → diff → (overrides|ollama) → (sign) → commit → tag
+cmd/omc/main.go       pipeline: repo → stage → diff → (overrides|ollama) → (sign) → commit → tag
 internal/config/      config.FromEnv() reads the eight env vars
 internal/gitops/      PlainOpen detection, StageAll, StagedDiff, Commit,
                       SignedCommit, ResolveIdentity, index→tree writer,
@@ -54,13 +54,13 @@ INFO record at startup (see `output.UI.Startup`).
 new git tag** before committing and tagging. The two must always agree:
 
 1. Edit `internal/version/version.go` and set `Version` to the new tag
-   (e.g. `v0.1.12`).
+   (e.g. `v0.1.16`).
 2. Commit that change.
 3. `git tag` the commit with the same semver value.
 
 The hardwired constant is the fallback. The Makefile overrides it at link
 time with the git tag via `-ldflags "-X
-paepcke.de/ocommit/internal/version.Version=$(VERSION)"`, where `VERSION ?=
+paepcke.de/omc/internal/version.Version=$(VERSION)"`, where `VERSION ?=
 $(shell git describe --tags --abbrev=0 ...)`. So a `make build` always
 stamps the binary with the exact tag it was built from; a plain `go
 build` uses the hardwired constant. Either way the version printed at
@@ -68,9 +68,9 @@ startup is correct as long as the constant and the latest tag agree.
 
 ## Auto semver tagging
 
-After every successful commit, `ocommit` tags that commit with a semver tag:
+After every successful commit, `omc` tags that commit with a semver tag:
 
-1. If `OCOMMIT_TAG` is set and parses as strict semver, that name (with a
+1. If `OMC_TAG` is set and parses as strict semver, that name (with a
    leading `v` added for bare versions) is used verbatim. Otherwise the
    auto-bump path runs.
 2. `gitops.LatestSemverTag(repo)` scans all `refs/tags/v*.*.*` refs and
@@ -82,7 +82,7 @@ After every successful commit, `ocommit` tags that commit with a semver tag:
    signer is available the tag is SSH-signed with the same key used for the
    commit — the armored `BEGIN SSH SIGNATURE` block is appended to the tag
    object content, byte-compatible with `git tag -s`.
-5. If the tag step fails (e.g. name collision), `ocommit` logs a warning and
+5. If the tag step fails (e.g. name collision), `omc` logs a warning and
    exits 0. The commit is never rolled back over a tag failure.
 
 ## Commit message format
@@ -101,30 +101,30 @@ The final message is:
   the payload signed is the commit without that header (git-conformant).
 - The body is optional: if the LLM returns only a subject, that is used.
 
-## Message & tag overrides (OCOMMIT_SUBJECT / OCOMMIT_MESSAGE / OCOMMIT_TAG)
+## Message & tag overrides (OMC_SUBJECT / OMC_MESSAGE / OMC_TAG)
 
 The subject, body, and tag can be supplied directly from the environment,
-which **wins over LLM generation**: when either `OCOMMIT_SUBJECT` or
-`OCOMMIT_MESSAGE` is set, the Ollama two-pass generation is skipped entirely
+which **wins over LLM generation**: when either `OMC_SUBJECT` or
+`OMC_MESSAGE` is set, the Ollama two-pass generation is skipped entirely
 and the override text lands verbatim in the commit object.
 
 ### Subject / message pairing rules
 
-| `OCOMMIT_SUBJECT` | `OCOMMIT_MESSAGE` | Subject used       | Body used               |
-| ------------------ | ----------------- | ------------------ | ----------------------- |
-| set                | set               | `OCOMMIT_SUBJECT`  | `OCOMMIT_MESSAGE`       |
-| set                | unset             | `OCOMMIT_SUBJECT`  | `OCOMMIT_SUBJECT`       |
-| unset              | set               | first line of `OCOMMIT_MESSAGE` (shortened to ≤72 chars) | full `OCOMMIT_MESSAGE` |
-| unset              | unset             | LLM TL;DR or `update` | LLM detail (if any)  |
+| `OMC_SUBJECT` | `OMC_MESSAGE` | Subject used       | Body used               |
+| ------------- | ------------- | ------------------ | ----------------------- |
+| set           | set           | `OMC_SUBJECT`      | `OMC_MESSAGE`           |
+| set           | unset         | `OMC_SUBJECT`      | `OMC_SUBJECT`           |
+| unset         | set           | first line of `OMC_MESSAGE` (shortened to ≤72 chars) | full `OMC_MESSAGE` |
+| unset         | unset         | LLM TL;DR or `update` | LLM detail (if any)  |
 
 Whitespace around the override values is trimmed. When only
-`OCOMMIT_MESSAGE` is set, its first non-empty line becomes the subject
+`OMC_MESSAGE` is set, its first non-empty line becomes the subject
 (mirroring the ≤72-char TL;DR contract of the LLM path); the full message
 is still used as the body.
 
 ### Tag override
 
-`OCOMMIT_TAG` lets the caller name the tag explicitly instead of bumping the
+`OMC_TAG` lets the caller name the tag explicitly instead of bumping the
 patch of the latest semver tag. The value is used **only** when it parses as
 strict semver `vMAJOR.MINOR.PATCH` (an optional leading `v`; three
 non-negative integer segments without leading zeros; no pre-release/build
@@ -133,7 +133,7 @@ so jumps like `v999.0.0` are valid.
 
 - A bare `1.2.3` is normalized to `v1.2.3`.
 - An invalid override (e.g. `v1.2`, `v1.2.3-rc.1`, `latest`, `v01.2.3`) is
-  **not** used: `ocommit` logs a warning and falls back to the normal
+  **not** used: `omc` logs a warning and falls back to the normal
   `LatestSemverTag` + `NextSemverTag` auto-bump path. The commit is never
   rolled back over a bad tag override.
 
@@ -144,26 +144,26 @@ the leading `v` for bare versions.
 
 | Variable            | Meaning                                              | Behavior if set but broken                |
 | ------------------- | ---------------------------------------------------- | ----------------------------------------- |
-| `OCOMMIT_KEY_PATH`  | Path to SSH private key                              | Warn, commit unsigned                     |
+| `OMC_SIGN_KEY_PATH` | Path to SSH private key                              | Warn, commit unsigned                     |
 | `OLLAMA_DESC_URL`   | Base URL of local Ollama REST API                    | Warn and use default `update` subject     |
 | `OLLAMA_DESC_MODEL` | Ollama model name (optional, default `llama3.2`)     | Default used                              |
-| `OCOMMIT_NAME`      | Commit author/committer name (optional)              | Falls back to git config, then default    |
-| `OCOMMIT_EMAIL`     | Commit author/committer email (optional)             | Falls back to git config, then default    |
-| `OCOMMIT_SUBJECT`   | Override the commit subject (skips LLM generation)    | Trimmed; see pairing rules above          |
-| `OCOMMIT_MESSAGE`   | Override the commit body (skips LLM generation)       | Trimmed; see pairing rules above          |
-| `OCOMMIT_TAG`       | Override the tag name (strict semver only)           | Invalid → warn + auto-bump fallback       |
+| `OMC_NAME`          | Commit author/committer name (optional)              | Falls back to git config, then default    |
+| `OMC_EMAIL`         | Commit author/committer email (optional)             | Falls back to git config, then default    |
+| `OMC_SUBJECT`       | Override the commit subject (skips LLM generation)   | Trimmed; see pairing rules above          |
+| `OMC_MESSAGE`       | Override the commit body (skips LLM generation)      | Trimmed; see pairing rules above          |
+| `OMC_TAG`           | Override the tag name (strict semver only)           | Invalid → warn + auto-bump fallback       |
 
 ## Git identity
 
 `internal/gitops.ResolveIdentity()` resolves the commit identity in this
 order:
 
-1. `OCOMMIT_NAME` / `OCOMMIT_EMAIL` (ocommit's own variables)
+1. `OMC_NAME` / `OMC_EMAIL` (omc's own variables)
 2. `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` then `GIT_COMMITTER_*` (standard git
    variables)
 3. `user.name` / `user.email` from the repository's git config (read via
    go-git, no external binary)
-4. Defaults: `OCOMMIT, Git Commiter <git@ocommit.local>`
+4. Defaults: `OMC, Git Commiter <git@omc.local>`
 
 Environment always wins over git config. Config files are only consulted
 for the identity fallback; nothing else depends on them.

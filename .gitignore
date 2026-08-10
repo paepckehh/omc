@@ -1,7 +1,7 @@
 # Binaries
-/ocommit
-/ocommit.exe
-/ocommit-linux-amd64
+/omc
+/omc.exe
+/omc-linux-amd64
 /dist/
 
 # Test artifacts

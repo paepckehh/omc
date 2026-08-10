@@ -1,6 +1,6 @@
-// Package config reads ocommit's entire configuration from the environment.
+// Package config reads omc's entire configuration from the environment.
 //
-// ocommit deliberately takes no command line arguments. Every knob is an
+// omc deliberately takes no command line arguments. Every knob is an
 // environment variable so the tool stays composable in scripts and shells.
 package config
 
@@ -12,7 +12,7 @@ import (
 // Config is the full runtime configuration derived from the environment.
 type Config struct {
 	// KeyPath points at an SSH private key used to sign the commit.
-	// Optional: empty disables signing. When set but unusable, ocommit
+	// Optional: empty disables signing. When set but unusable, omc
 	// logs a warning and commits without signing.
 	KeyPath string
 	// OllamaURL is the base URL of a local Ollama REST API, e.g.
@@ -44,20 +44,20 @@ type Config struct {
 // FromEnv loads the configuration from the process environment.
 func FromEnv() Config {
 	return Config{
-		KeyPath:     expandTilde(os.Getenv("OCOMMIT_KEY_PATH")),
+		KeyPath:     expandTilde(os.Getenv("OMC_SIGN_KEY_PATH")),
 		OllamaURL:   os.Getenv("OLLAMA_DESC_URL"),
 		OllamaModel: os.Getenv("OLLAMA_DESC_MODEL"),
-		Name:        os.Getenv("OCOMMIT_NAME"),
-		Email:       os.Getenv("OCOMMIT_EMAIL"),
-		Subject:     os.Getenv("OCOMMIT_SUBJECT"),
-		Message:     os.Getenv("OCOMMIT_MESSAGE"),
-		Tag:         os.Getenv("OCOMMIT_TAG"),
+		Name:        os.Getenv("OMC_NAME"),
+		Email:       os.Getenv("OMC_EMAIL"),
+		Subject:     os.Getenv("OMC_SUBJECT"),
+		Message:     os.Getenv("OMC_MESSAGE"),
+		Tag:         os.Getenv("OMC_TAG"),
 	}
 }
 
 // expandTilde rewrites a leading "~/" (or a bare "~") to the user's home
 // directory. Go's os.ReadFile does not perform shell tilde expansion, so
-// values quoted in shells or Makefiles (OCOMMIT_KEY_PATH="~/.ssh/agent")
+// values quoted in shells or Makefiles (OMC_SIGN_KEY_PATH="~/.ssh/agent")
 // would otherwise be passed through verbatim and fail to open. A path that
 // is empty or does not start with "~" is returned unchanged.
 func expandTilde(path string) string {

@@ -1,4 +1,4 @@
-module paepcke.de/ocommit
+module paepcke.de/omc
 
 go 1.26.5
 
