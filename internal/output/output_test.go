@@ -265,12 +265,16 @@ func TestSecurityKeyTouchNoticeNonTTY(t *testing.T) {
 func TestStepTouchCommitNonTTY(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		ui, _, err := newTestUI()
-		if eerr := ui.StepTouchCommit("/k/id_ed25519_sk", "the commit signing", "commit", "committing as Test <t@e> (signed)", func() error { return nil }); eerr != nil {
+		if eerr := ui.StepTouchCommit("/k/id_ed25519_sk", "the commit signing", "sk-ssh-ed25519@openssh.com", "commit", "committing as Test <t@e> (signed)", func() error { return nil }); eerr != nil {
 			t.Fatalf("StepTouchCommit returned error: %v", eerr)
 		}
 		got := err.String()
 		if !strings.Contains(got, "INFO") || !strings.Contains(got, "commit") {
 			t.Errorf("missing announce line, got: %q", got)
+		}
+		// The touch notice must be emitted BEFORE the blocking call.
+		if !strings.Contains(got, "waiting for security key touch") {
+			t.Errorf("missing waiting-for-touch notice, got: %q", got)
 		}
 		if !strings.Contains(got, "OK") || !strings.Contains(got, "done") {
 			t.Errorf("missing done line, got: %q", got)
@@ -278,11 +282,21 @@ func TestStepTouchCommitNonTTY(t *testing.T) {
 		if !strings.Contains(got, "touch confirmed, thank you") {
 			t.Errorf("missing touch-confirmed record, got: %q", got)
 		}
+		// The confirmed record must carry the algorithm and elapsed fields.
+		if !strings.Contains(got, "algo=sk-ssh-ed25519@openssh.com") {
+			t.Errorf("missing algo= field in confirmed record, got: %q", got)
+		}
+		if !strings.Contains(got, "elapsed=") {
+			t.Errorf("missing elapsed= field in confirmed record, got: %q", got)
+		}
+		if !strings.Contains(got, "outcome=confirmed") {
+			t.Errorf("missing outcome=confirmed field, got: %q", got)
+		}
 	})
 	t.Run("failure", func(t *testing.T) {
 		ui, _, err := newTestUI()
 		want := errors.New("agent unreachable")
-		if eerr := ui.StepTouchCommit("/k/id_ed25519_sk", "the commit signing", "commit", "committing", func() error { return want }); eerr == nil {
+		if eerr := ui.StepTouchCommit("/k/id_ed25519_sk", "the commit signing", "sk-ssh-ed25519@openssh.com", "commit", "committing", func() error { return want }); eerr == nil {
 			t.Fatal("StepTouchCommit returned nil for failing fn")
 		}
 		got := err.String()
@@ -294,7 +308,7 @@ func TestStepTouchCommitNonTTY(t *testing.T) {
 
 func TestStepTouchPushNonTTY(t *testing.T) {
 	ui, _, err := newTestUI()
-	if eerr := ui.StepTouchPush("/k/id_ed25519_sk", "the push", "push", "pushing commit and tags to remote", func() error { return nil }); eerr != nil {
+	if eerr := ui.StepTouchPush("/k/id_ed25519_sk", "the push", "sk-ssh-ed25519@openssh.com", "push", "pushing commit and tags to remote", func() error { return nil }); eerr != nil {
 		t.Fatalf("StepTouchPush returned error: %v", eerr)
 	}
 	got := err.String()
@@ -644,12 +658,60 @@ func TestNestedGroupHeaderIndent(t *testing.T) {
 
 func TestTouchConfirmedTextOnTTY(t *testing.T) {
 	ui, _, err := newTestTTYUI()
-	ui.TouchStart("/k/id_ed25519_sk", "the commit signing")
+	ui.TouchStart("/k/id_ed25519_sk", "the commit signing", "sk-ssh-ed25519@openssh.com")
 	ui.TouchStop()
 	ui.TouchConfirmed()
 	got := stripANSI(err.String())
 	if !strings.Contains(got, "touch confirmed, thank you") {
 		t.Errorf("TTY touch confirmation missing, got: %q", got)
+	}
+	// Enriched fields must be present.
+	if !strings.Contains(got, "algo=sk-ssh-ed25519@openssh.com") {
+		t.Errorf("missing algo= field, got: %q", got)
+	}
+	if !strings.Contains(got, "elapsed=") {
+		t.Errorf("missing elapsed= field, got: %q", got)
+	}
+	if !strings.Contains(got, "outcome=confirmed") {
+		t.Errorf("missing outcome=confirmed field, got: %q", got)
+	}
+}
+
+func TestTouchTimeoutNonTTY(t *testing.T) {
+	ui, _, err := newTestUI()
+	ui.TouchStart("/k/id_ed25519_sk", "the commit signing", "sk-ssh-ed25519@openssh.com")
+	// Simulate the countdown reaching zero.
+	ui.mu.Lock()
+	ui.touchInfo.timedOut = true
+	ui.mu.Unlock()
+	ui.TouchStop()
+	ui.TouchConfirmed()
+	got := err.String()
+	if !strings.Contains(got, "WARN") {
+		t.Errorf("missing WARN level for timeout, got: %q", got)
+	}
+	if !strings.Contains(got, "touch timed out") {
+		t.Errorf("missing timeout message, got: %q", got)
+	}
+	if !strings.Contains(got, "outcome=timeout") {
+		t.Errorf("missing outcome=timeout field, got: %q", got)
+	}
+}
+
+func TestTouchTimeoutTTY(t *testing.T) {
+	ui, _, err := newTestTTYUI()
+	ui.TouchStart("/k/id_ed25519_sk", "the commit signing", "sk-ssh-ed25519@openssh.com")
+	ui.mu.Lock()
+	ui.touchInfo.timedOut = true
+	ui.mu.Unlock()
+	ui.TouchStop()
+	ui.TouchConfirmed()
+	got := stripANSI(err.String())
+	if !strings.Contains(got, "touch timed out") {
+		t.Errorf("TTY timeout message missing, got: %q", got)
+	}
+	if !strings.Contains(got, "WARN") {
+		t.Errorf("missing WARN level for timeout, got: %q", got)
 	}
 }
 

@@ -125,11 +125,14 @@ type UI struct {
 	// touchInfo holds the identity of the smartcard-bound operation whose
 	// countdown is currently shown (see TouchStart). It is cleared when the
 	// countdown stops and is used to render the "touch confirmed" notice so
-	// the confirmation names the same action and key path the countdown was
-	// shown for.
+	// the confirmation names the same action, key path, and signing algorithm
+	// the countdown was shown for.
 	touchInfo struct {
-		keyPath string
-		action  string
+		keyPath   string
+		action    string
+		algorithm string
+		startedAt time.Time
+		timedOut  bool
 	}
 
 	// groups holds the stack of active logical log groups (the colored
@@ -912,10 +915,16 @@ func (u *UI) SecurityKeyTouchNotice(keyPath, action string) {
 // urgency of the pending touch is unmistakable. The countdown runs
 // concurrently with the blocking operation: start it, run the operation on
 // the calling goroutine, then stop it once the operation returns.
+//
+// timedOut is set by the ticker goroutine when the countdown reaches zero
+// before the operation completes; TouchStop copies it into touchInfo so
+// TouchConfirmed can report the timeout outcome (WARN) instead of a normal
+// confirmed touch (OK).
 type touchCountdown struct {
 	remaining float64
 	done      chan struct{}
 	over      bool
+	timedOut  bool
 }
 
 // countdownBarWidth is the number of half-block cells used for the progress
@@ -931,6 +940,11 @@ const countdownTotal = 30.0
 // keeps the seconds display and progress bar smooth without burning CPU.
 const countdownFPS = 10
 
+// countdownProgressInterval is how often the non-TTY path emits a progress
+// record while waiting for a smartcard touch. At 5 seconds it adds modest
+// noise to captured logs while making a long wait unmistakably visible.
+const countdownProgressInterval = 5 * time.Second
+
 // newTouchCountdown creates a countdown ready to be started.
 func newTouchCountdown() *touchCountdown {
 	return &touchCountdown{remaining: countdownTotal, done: make(chan struct{})}
@@ -944,25 +958,19 @@ func (c *touchCountdown) render() string {
 	if countdownTotal > 0 {
 		frac = elapsed / countdownTotal
 	}
-	if frac < 0 {
-		frac = 0
-	} else if frac > 1 {
-		frac = 1
-	}
-	full := int(frac * float64(countdownBarWidth))
-	if full > countdownBarWidth {
-		full = countdownBarWidth
-	}
+	frac = max(0, min(1, frac))
+	full := min(int(frac*float64(countdownBarWidth)), countdownBarWidth)
 	empty := countdownBarWidth - full
 
-	bar := ""
+	var bar strings.Builder
+	bar.Grow(countdownBarWidth)
 	for range full {
-		bar += "▰"
+		bar.WriteString("▰")
 	}
 	for range empty {
-		bar += "▱"
+		bar.WriteString("▱")
 	}
-	barStyled := lipgloss.NewStyle().Foreground(palette.warn).Render(bar)
+	barStyled := lipgloss.NewStyle().Foreground(palette.warn).Render(bar.String())
 	key := lipgloss.NewStyle().Bold(true).Foreground(palette.warn).Render("🔑 TOUCH YOUR SECURITY KEY")
 	timer := lipgloss.NewStyle().Bold(true).Foreground(palette.err).Render("⏱ " + c.fmtSeconds())
 	return fmt.Sprintf("%s  %s  %s", key, barStyled, timer)
@@ -970,10 +978,7 @@ func (c *touchCountdown) render() string {
 
 // fmtSeconds renders the remaining time as an M:SS string.
 func (c *touchCountdown) fmtSeconds() string {
-	s := int(c.remaining)
-	if s < 0 {
-		s = 0
-	}
+	s := max(0, int(c.remaining))
 	return fmt.Sprintf("%d:%02d", s/60, s%60)
 }
 
@@ -981,13 +986,18 @@ func (c *touchCountdown) fmtSeconds() string {
 // operation (commit/tag signing, SSH push) and records which action/key the
 // countdown belongs to. Pair it with TouchStop once the blocking operation
 // returns; the running ticker stops there. On a non-TTY the caller emits the
-// structured records instead and this is a no-op.
-func (u *UI) TouchStart(keyPath, action string) {
+// structured records instead and this is a no-op. algorithm is the signing
+// algorithm in effect (e.g. "sk-ssh-ed25519@openssh.com") so the
+// confirmation record can report it.
+func (u *UI) TouchStart(keyPath, action, algorithm string) {
 	// Record the identity of the operation first so TouchConfirmed can
 	// name it, on TTY and off (the countdown itself only runs on a TTY).
 	u.mu.Lock()
 	u.touchInfo.keyPath = keyPath
 	u.touchInfo.action = action
+	u.touchInfo.algorithm = algorithm
+	u.touchInfo.startedAt = time.Now()
+	u.touchInfo.timedOut = false
 	u.mu.Unlock()
 	if !u.tty {
 		return
@@ -1012,8 +1022,10 @@ func (u *UI) TouchStart(keyPath, action string) {
 					return
 				}
 				cd.remaining -= fps.Seconds()
-				if cd.remaining < 0 {
+				if cd.remaining <= 0 {
 					cd.remaining = 0
+					cd.timedOut = true
+					u.touchInfo.timedOut = true
 				}
 				frame := cd.render()
 				fmt.Fprintf(u.Err, "\r\033[K%s", frame)
@@ -1026,7 +1038,9 @@ func (u *UI) TouchStart(keyPath, action string) {
 // TouchStop stops the touch countdown started by TouchStart and clears its
 // line. The touchInfo is left in place so TouchConfirmed can render the
 // confirmation naming the just-completed operation; it is cleared by the
-// start of the next countdown.
+// start of the next countdown. If the countdown reached zero before the
+// operation returned, the timedOut flag is propagated to touchInfo so
+// TouchConfirmed reports the timeout outcome.
 func (u *UI) TouchStop() {
 	if !u.tty {
 		return
@@ -1037,42 +1051,76 @@ func (u *UI) TouchStop() {
 			u.touch.over = true
 			close(u.touch.done)
 		}
+		if u.touch.timedOut {
+			u.touchInfo.timedOut = true
+		}
 		u.touch = nil
 	}
 	fmt.Fprint(u.Err, "\r\033[K")
 	u.mu.Unlock()
 }
 
-// TouchConfirmed reports that the smartcard touch for the operation shown by
-// the last TouchStart/TouchStop pair was detected (the blocking call
-// returned successfully). On a TTY it clears the countdown line and writes a
-// direct, unmissable "touch confirmed, thank you" line to stderr, followed
-// by the structured OK record with the details of what can now proceed. Off
-// a TTY only the structured record is emitted so captured logs stay
-// greppable.
+// TouchConfirmed reports the outcome of the smartcard touch for the
+// operation shown by the last TouchStart/TouchStop pair. When the blocking
+// call returned successfully (the user touched the device), it emits an OK
+// record with the elapsed wait time, the key path, the signing algorithm,
+// and what action can now proceed. When the countdown reached zero before
+// the operation returned (the user did not touch in time), it emits a WARN
+// record instead so the timeout is visible in the structured logs. On a TTY
+// it also clears the countdown line and writes a direct confirmation or
+// timeout line to stderr. Off a TTY only the structured record is emitted so
+// captured logs stay greppable.
 func (u *UI) TouchConfirmed() {
+	u.mu.Lock()
 	keyPath := u.touchInfo.keyPath
 	action := u.touchInfo.action
+	algorithm := u.touchInfo.algorithm
+	timedOut := u.touchInfo.timedOut
+	elapsed := time.Since(u.touchInfo.startedAt).Round(time.Second)
 	u.touchInfo.keyPath = ""
 	u.touchInfo.action = ""
+	u.touchInfo.algorithm = ""
+	u.touchInfo.startedAt = time.Time{}
+	u.touchInfo.timedOut = false
+	u.mu.Unlock()
 
+	elapsedStr := elapsed.String()
 	if u.tty {
-		confirm := lipgloss.NewStyle().
-			Bold(true).
-			Foreground(palette.success).
-			Render("💛 touch confirmed, thank you!")
-		fmt.Fprintf(u.Err, "\r\033[K%s\n", confirm)
+		if timedOut {
+			msg := lipgloss.NewStyle().
+				Bold(true).
+				Foreground(palette.err).
+				Render("⏰ touch timed out, waiting for security key")
+			fmt.Fprintf(u.Err, "\r\033[K%s\n", msg)
+		} else {
+			confirm := lipgloss.NewStyle().
+				Bold(true).
+				Foreground(palette.success).
+				Render("💛 touch confirmed, thank you!")
+			fmt.Fprintf(u.Err, "\r\033[K%s\n", confirm)
+		}
 	}
-	if action != "" {
-		u.emit(u.Err, "OK", "touch", "touch confirmed, thank you",
-			F("now", "proceeding with "+action),
-			F("key", keyPath),
-		)
+
+	fields := []Field{
+		F("elapsed", elapsedStr),
+		F("key", keyPath),
+	}
+	if algorithm != "" {
+		fields = append(fields, F("algo", algorithm))
+	}
+	if timedOut {
+		fields = append(fields, F("outcome", "timeout"))
+		if action != "" {
+			fields = append(fields, F("action", action))
+		}
+		u.emit(u.Err, "WARN", "touch", "touch timed out waiting for security key", fields...)
 		return
 	}
-	u.emit(u.Err, "OK", "touch", "touch confirmed, thank you",
-		F("now", "proceeding"),
-	)
+	fields = append(fields, F("outcome", "confirmed"))
+	if action != "" {
+		fields = append(fields, F("now", "proceeding with "+action))
+	}
+	u.emit(u.Err, "OK", "touch", "touch confirmed, thank you", fields...)
 }
 
 // stepTouchInfo runs the smartcard-aware counterpart to Step: where Step
@@ -1082,22 +1130,67 @@ func (u *UI) TouchConfirmed() {
 // (SecurityKeyTouchNotice) is emitted by the caller beforehand; stepTouchInfo
 // owns the animation, the step-completion record, and the "touch confirmed"
 // notice. keyPath and action name the smartcard operation whose touch the
-// countdown waits for.
-func (u *UI) stepTouchInfo(step, msg, keyPath, action string, fn func() error) error {
+// countdown waits for; algorithm is the signing algorithm in effect (e.g.
+// "sk-ssh-ed25519@openssh.com") so the confirmation and progress records
+// report it.
+func (u *UI) stepTouchInfo(step, msg, keyPath, action, algorithm string, fn func() error) error {
 	if !u.tty {
+		// Emit the touch notice BEFORE the blocking call so captured logs
+		// show the prompt in the right order, then run fn() in a goroutine
+		// while emitting periodic progress records so a long wait is
+		// visible in CI/pipe logs.
 		u.emit(u.Err, "INFO", step, msg)
-		err := fn()
-		if err != nil {
-			u.emit(u.Err, "FAIL", step, err.Error(), F("err", err.Error()))
-			return err
+		u.TouchStart(keyPath, action, algorithm)
+		u.emit(u.Err, "INFO", "touch", "waiting for security key touch",
+			F("key", keyPath),
+			F("mode", "smartcard"),
+			F("action", action),
+		)
+
+		type result struct{ err error }
+		resCh := make(chan result, 1)
+		go func() {
+			resCh <- result{err: fn()}
+		}()
+
+		tk := time.NewTicker(countdownProgressInterval)
+		defer tk.Stop()
+		timedOut := false
+		start := time.Now()
+		for {
+			select {
+			case r := <-resCh:
+				u.TouchStop()
+				if r.err != nil {
+					u.emit(u.Err, "FAIL", step, r.err.Error(), F("err", r.err.Error()))
+					return r.err
+				}
+				u.TouchConfirmed()
+				u.emit(u.Err, "OK", step, "done")
+				return nil
+			case <-tk.C:
+				elapsed := time.Since(start)
+				remaining := countdownTotal - elapsed.Seconds()
+				if remaining <= 0 && !timedOut {
+					timedOut = true
+					u.emit(u.Err, "WARN", "touch", "touch countdown expired, still waiting",
+						F("key", keyPath),
+						F("action", action),
+						F("elapsed", elapsed.Round(time.Second).String()),
+					)
+				}
+				if !timedOut {
+					u.emit(u.Err, "INFO", "touch", "still waiting for security key touch",
+						F("key", keyPath),
+						F("remaining", fmt.Sprintf("%ds", int(remaining))),
+						F("elapsed", elapsed.Round(time.Second).String()),
+					)
+				}
+			}
 		}
-		u.TouchStart(keyPath, action)
-		u.TouchConfirmed()
-		u.emit(u.Err, "OK", step, "done")
-		return nil
 	}
 
-	u.TouchStart(keyPath, action)
+	u.TouchStart(keyPath, action, algorithm)
 	err := fn()
 	u.TouchStop()
 
@@ -1113,23 +1206,24 @@ func (u *UI) stepTouchInfo(step, msg, keyPath, action string, fn func() error) e
 // StepTouchCommit runs the commit-signing step fn while showing the animated
 // touch countdown (TTY) or the structured step records (non-TTY). Use it for
 // the smartcard commit-signing path so the user is prompted to touch the
-// device right now. keyPath and action name the operation so the touch
-// confirmation is specific.
-func (u *UI) StepTouchCommit(keyPath, action, step, msg string, fn func() error) error {
-	return u.stepTouchInfo(step, msg, keyPath, action, fn)
+// device right now. keyPath and action name the operation; algorithm is the
+// signing algorithm so the touch confirmation is specific.
+func (u *UI) StepTouchCommit(keyPath, action, algorithm, step, msg string, fn func() error) error {
+	return u.stepTouchInfo(step, msg, keyPath, action, algorithm, fn)
 }
 
 // StepTouchTag runs the tag-signing step fn with the touch countdown. Use it
-// for the smartcard tag-signing path. keyPath and action name the operation.
-func (u *UI) StepTouchTag(keyPath, action, step, msg string, fn func() error) error {
-	return u.stepTouchInfo(step, msg, keyPath, action, fn)
+// for the smartcard tag-signing path. keyPath and action name the operation;
+// algorithm is the signing algorithm.
+func (u *UI) StepTouchTag(keyPath, action, algorithm, step, msg string, fn func() error) error {
+	return u.stepTouchInfo(step, msg, keyPath, action, algorithm, fn)
 }
 
 // StepTouchPush runs the SSH push step fn with the touch countdown when the
 // push key is a security-key handle. Use it for the smartcard push path.
-// keyPath and action name the operation.
-func (u *UI) StepTouchPush(keyPath, action, step, msg string, fn func() error) error {
-	return u.stepTouchInfo(step, msg, keyPath, action, fn)
+// keyPath and action name the operation; algorithm is the signing algorithm.
+func (u *UI) StepTouchPush(keyPath, action, algorithm, step, msg string, fn func() error) error {
+	return u.stepTouchInfo(step, msg, keyPath, action, algorithm, fn)
 }
 
 // PushResult renders the post-push notice to stdout: the remote that was

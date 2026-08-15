@@ -221,7 +221,7 @@ func run() int {
 	ui.BeginGroup("📝 commit", commitLines)
 	if skCommit {
 		commitStep = func(step, msg string, fn func() error) error {
-			return ui.StepTouchCommit(cfg.KeyPath, "the commit signing", step, msg, fn)
+			return ui.StepTouchCommit(cfg.KeyPath, "the commit signing", signer.PublicAlgorithm(), step, msg, fn)
 		}
 	} else if cfg.KeyPath == "" {
 		// No key configured at all: announce the unsigned path here (the
@@ -249,7 +249,7 @@ func run() int {
 	var tagName string
 	if skMode && signer != nil {
 		tagStep = func(step, msg string, fn func() error) error {
-			return ui.StepTouchTag(cfg.KeyPath, "the tag signing", step, msg, fn)
+			return ui.StepTouchTag(cfg.KeyPath, "the tag signing", signer.PublicAlgorithm(), step, msg, fn)
 		}
 	}
 	ui.BeginGroup("🏷️ tag", tagLines)
@@ -292,9 +292,13 @@ func run() int {
 		ui.BeginGroup("🚀 push", pushLines)
 		pushStep := ui.Step
 		if skPush {
+			var pushAlgo string
+			if signer != nil {
+				pushAlgo = signer.PublicAlgorithm()
+			}
 			ui.SecurityKeyTouchNotice(cfg.PushKeyPath, "the push")
 			pushStep = func(step, msg string, fn func() error) error {
-				return ui.StepTouchPush(cfg.PushKeyPath, "the push", step, msg, fn)
+				return ui.StepTouchPush(cfg.PushKeyPath, "the push", pushAlgo, step, msg, fn)
 			}
 		}
 		if err := pushStep("push", "pushing commit and tags to remote", func() error {
@@ -389,7 +393,7 @@ func pushNothing(ui *output.UI, repo *git.Repository, cfg config.Config) {
 	pushStep := ui.Step
 	if sign.IsSecurityKeyPath(cfg.PushKeyPath) {
 		pushStep = func(step, msg string, fn func() error) error {
-			return ui.StepTouchPush(cfg.PushKeyPath, "the push", step, msg, fn)
+			return ui.StepTouchPush(cfg.PushKeyPath, "the push", "", step, msg, fn)
 		}
 	}
 	var res gitops.PushResult
