@@ -4,23 +4,23 @@
 
 **oh-my-commit — one command, no flags. Signed, AI-described commits your team can actually trust.**
 
-`omc` (spoken: *"oh-my-commit"*) is a plain, stupid-simple git auto commit 
-sign tag push utility, with agent/human role seperation for signed commits
-including llm generated commit message and final review/push for humans.
-utility written in pure Go. It takes **zero command line arguments**, 
-zero runtime dependencies: not even legacy git installed - every behavior
-is an environment variable — and inside any git working tree 
+`omc` (spoken: *"oh-my-commit"*) is a plain, stupid-simple git auto-commit,
+sign, tag, and push utility written in pure Go. It takes **zero command line
+arguments** and has **zero runtime dependencies** — not even `git` needs to
+be installed. Every behavior is an environment variable. Inside any git
+working tree, one 3-letter command does the equivalent of:
 
-one 3 letter command does the equivalent of:
-
-```script 
+```script
 #!/bin/sh
-git add -A 
-git commit -S -m <generate detailed commit message/analysis> 
-git tag -s <old_semver+1> 
+git add -A
+git commit -S -m <generated detailed commit message>
+git tag -s <old_semver+1>
 [opt: git push]
 [opt: git push --tags]
 ```
+
+It supports agent/human role separation for signed commits, including
+LLM-generated commit messages and final review/push by humans.
 
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Pure Go](https://img.shields.io/badge/Pure_Go-no_git_binary-7DD3FC?logo=go&logoColor=white)](https://github.com/paepckehh/omc)
@@ -166,50 +166,54 @@ omc
 ## 🎬 Demo
 
 When stderr is a terminal, `omc` renders a structured, timestamped TUI
-built on [charmbracelet/bubbles] + [lipgloss]: every line is a structured log
-record of the form `<HH:MM:SS> <LEVEL> omc [<step>] <message> [key=value ...]`,
-with animated spinners per pipeline step, a gradient progress bar for the
-two-stage LLM generation, color-coded levels (OK / INFO / WARN / FAIL), and
-an animated touch countdown when a FIDO2 security key is used. Related steps
-are gathered into nested log groups — `📂 preparing repository`,
-`💬 message generation`, `🔑 signing key`, and `📦 committing & publishing`
-(the latter with `📝 commit` / `🏷️ tag` / `🚀 push` sub-groups) — each line
-prefixed with a tree connector (`┌─` first, `├─` middle, `└─` last, one per
-open level, like `git log --graph`) so the whole run reads as one tree.
+built on [lipgloss]: every line is a structured log record of the form
+`<HH:MM:SS> <LEVEL> omc [<step>] <message> [key=value ...]`, with
+animated spinners per pipeline step, color-coded levels (OK / INFO / WARN
+/ FAIL), and an animated touch countdown when a FIDO2 security key is
+used. Related steps are gathered into nested log groups — `📂 preparing
+repository`, `💬 message generation`, `🔑 signing key`, and `📦
+committing & publishing` (the latter with `📝 commit` / `🏷️ tag` / `🚀
+push` sub-groups) — each group header is itself a timestamped line, and
+each record is prefixed with a tree connector (`┌─` first, `├─` middle,
+`└─` last, one per open level, like `git log --graph`) so the whole run
+reads as one tree.
 
-The blocks below are real captured output (no Ollama running, so the message
-falls back to `update`). Diagnostics and progress go to stderr; the final
-commit and tag results go to stdout.
+The blocks below are real captured output (no Ollama running, so the
+message falls back to `update`). Diagnostics and progress go to stderr;
+the final commit and tag results go to stdout.
 
 ### 1. Software signing key
 
 ```console
-$ export OMC_SIGN_KEY_PATH=~/.ssh/agent
+$ export OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519
 $ echo 'func main() { fmt.Println("hi") }' >> main.go
 $ omc
-14:18:31 ℹ️ INFO omc omc v0.1.31
-14:18:31 ℹ️ INFO omc config detected environment count=1 OMC_SIGN_KEY_PATH=~/.ssh/agent
+14:18:31 ℹ️ INFO omc omc v0.1.38
+14:18:31 ℹ️ INFO omc config detected environment count=1 OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519
 14:18:31 ℹ️ INFO omc config verified config count=1 sign_key=valid=true
-14:18:31 ℹ️ INFO omc 📂 open detecting repository
-14:18:31 ✅ OK omc 📂 open done
-14:18:31 ℹ️ INFO omc 📥 stage staging all changes
-14:18:31 ✅ OK omc 📥 stage done
-14:18:31 ℹ️ INFO omc 🔍 diff reading staged diff
-14:18:31 ✅ OK omc 🔍 diff done
+14:18:31   📂 preparing repository
+14:18:31 ┌─ ✅ OK omc 📂 open done
+14:18:31 ├─ ℹ️ INFO omc repo detected repository context dir=/home/ada/demo latest_tag=(none) origin_url=git@github.com:ada/demo.git
+14:18:31 ├─ ✅ OK omc 📥 stage done
+14:18:31 └─ ✅ OK omc 🔍 diff done
 14:18:31 ℹ️ INFO omc 🔍 diff changed files count=2
-  - .gitignore
-  - main.go
-14:18:31 ℹ️ INFO omc 🔑 load key loading ssh signing key
-14:18:31 ✅ OK omc 🔑 load key done
-14:18:31 ℹ️ INFO omc signing with ~/.ssh/agent (ssh-ed25519)
-14:18:31 ℹ️ INFO omc ✍️ sign signing commit with ssh key key=~/.ssh/agent
-14:18:31 ℹ️ INFO omc 📝 commit committing as Ada Lovelace <ada@example.com> (signed)
-14:18:31 ✅ OK omc 📝 commit done
-14:18:31 ℹ️ INFO omc 🏷️ tag bumping semver patch
-14:18:31 ✅ OK omc 🏷️ tag done
-14:18:31 ℹ️ INFO omc 💬 msg subject: update
-14:18:31 ✅ OK omc 📝 commit committed hash=3f8bc54 signed=true
-14:18:31 ✅ OK omc 🏷️ tag tagged tag=v0.0.1 hash=3f8bc54 signed=true
+  › .gitignore
+  › main.go
+  └ commit message
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ 💬 update                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+14:18:31   🔑 signing key
+14:18:31 ┌─ ✅ OK omc 🔑 load key done
+14:18:31 ├─ ℹ️ INFO omc signing with ~/.ssh/id_ed25519 (ssh-ed25519)
+14:18:31   📦 committing & publishing
+14:18:31 ┌─   📝 commit
+14:18:31 ┌─ ┌─ ℹ️ INFO omc ✍️ sign signing commit with ssh key key=~/.ssh/id_ed25519
+14:18:31 ├─ ├─ ℹ️ INFO omc 📝 commit committing as Ada Lovelace <ada@example.com> (signed)
+14:18:31 ├─ └─ ✅ OK omc 📝 commit committed hash=3f8bc54 signed=true
+14:18:31 ├─   🏷️ tag
+14:18:31 ├─ ┌─ ✅ OK omc 🏷️ tag done
+14:18:31 └─ └─ ✅ OK omc 🏷️ tag tagged tag=v0.0.1 hash=3f8bc54 signed=true
 ```
 
 ### 2. Smartcard (FIDO2) signing key — touch countdown
@@ -217,32 +221,30 @@ $ omc
 With `OMC_SIGN_KEY_PATH` pointing at an `id_ed25519_sk` handle, omc signs
 through the ssh-agent. On a TTY a live countdown animates while the signature
 waits for the device touch, and the moment the operation returns the
-countdown is replaced by a direct "touch confirmed, thank you" line plus a
-structured record naming what can now proceed:
+countdown is replaced by a timestamped "touch confirmed, thank you" line
+inside the tree plus a structured record naming what can now proceed:
 
 ```console
 $ ssh-add ~/.ssh/id_ed25519_sk
 $ export OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519_sk
 $ omc
 ...
-  🔑 signing key
+14:22:09   🔑 signing key
 14:22:09 ┌─ ⚠️ WARN omc warning: ssh key ~/.ssh/id_ed25519_sk is a smartcard security key; signing via the ssh-agent
 14:22:09 ├─ ℹ️ INFO omc ✍️ sign signing commit with ssh-agent security key key=~/.ssh/id_ed25519_sk mode=smartcard algo=sk-ssh-ed25519@openssh.com
-  📦 committing & publishing
-┌─   📝 commit
-14:22:09 ├─ ┌─ ℹ️ INFO omc 🔐 touch security key detected: touch your smartcard/yubikey when it blinks to authorise the commit signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the commit signing
-🔑 TOUCH YOUR SECURITY KEY  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:28
+14:22:09 ├─ ℹ️ INFO omc 🔐 touch security key detected: touch your smartcard/yubikey when it blinks to authorise the commit signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the commit signing
+14:22:09   📦 committing & publishing
+14:22:09 ┌─   📝 commit
+14:22:09 ┌─ ┌─ ℹ️ INFO omc 🔐 touch security key detected: touch your smartcard/yubikey when it blinks to authorise the commit signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the commit signing
 🔑 TOUCH YOUR SECURITY KEY  ▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:21
-💛 touch confirmed, thank you!
-14:22:14 ├─ └─ ✅ OK omc 🔐 touch touch confirmed, thank you now=proceeding with the commit signing key=~/.ssh/id_ed25519_sk
-14:22:14 ├─ ┌─ ✅ OK omc 📝 commit done
+14:22:14 ┌─ └─ 💛 touch confirmed, thank you!
+14:22:14 ├─ ┌─ ✅ OK omc 🔐 touch touch confirmed, thank you now=proceeding with the commit signing key=~/.ssh/id_ed25519_sk
 14:22:14 ├─ └─ ✅ OK omc 📝 commit committed hash=5c91e2a signed=true
-├─   🏷️ tag
+14:22:14 ├─   🏷️ tag
 14:22:14 ├─ ┌─ ℹ️ INFO omc 🔐 touch security key detected: touch your smartcard/yubikey when it blinks to authorise the tag signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the tag signing
 🔑 TOUCH YOUR SECURITY KEY  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:29
-💛 touch confirmed, thank you!
-14:22:18 ├─ └─ ✅ OK omc 🔐 touch touch confirmed, thank you now=proceeding with the tag signing key=~/.ssh/id_ed25519_sk
-14:22:18 ├─ ┌─ ✅ OK omc 🏷️ tag done
+14:22:18 ├─ └─ 💛 touch confirmed, thank you!
+14:22:18 ├─ ┌─ ✅ OK omc 🔐 touch touch confirmed, thank you now=proceeding with the tag signing key=~/.ssh/id_ed25519_sk
 14:22:18 └─ └─ ✅ OK omc 🏷️ tag tagged tag=v0.0.2 hash=5c91e2a signed=true
 ```
 
@@ -262,19 +264,17 @@ Skip the LLM entirely and write the commit text + tag name yourself:
 $ OMC_SUBJECT="feat: add greeting to main" \
   OMC_MESSAGE='Adds a fmt.Println("hi") entrypoint so the binary does something on run.' \
   OMC_TAG="v1.0.0" \
-  OMC_SIGN_KEY_PATH=~/.ssh/agent \
+  OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519 \
   omc
 ...
-14:24:10 ℹ️ INFO omc config detected environment count=4 OMC_SIGN_KEY_PATH=~/.ssh/agent OMC_SUBJECT=feat: add greeting to main OMC_MESSAGE=Adds a fmt.Println("hi") entrypoint so the binary does something on run. OMC_TAG=v1.0.0
+14:24:10 ℹ️ INFO omc config detected environment count=4 OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519 OMC_SUBJECT=feat: add greeting to main OMC_MESSAGE=Adds a fmt.Println("hi") entrypoint so the binary does something on run. OMC_TAG=v1.0.0
 14:24:10 ℹ️ INFO omc config verified config count=2 sign_key=valid=true tag_override=valid=true
 ...
 14:24:10 ℹ️ INFO omc message override active (OMC_SUBJECT/OMC_MESSAGE)
-14:24:10 ℹ️ INFO omc ✍️ sign signing commit with ssh key key=~/.ssh/agent
+14:24:10 ℹ️ INFO omc ✍️ sign signing commit with ssh key key=~/.ssh/id_ed25519
 14:24:10 ℹ️ INFO omc 📝 commit committing as Ada Lovelace <ada@example.com> (signed)
-14:24:11 ✅ OK omc 📝 commit done
-14:24:11 ℹ️ INFO omc 🏷️ tag tagging v1.0.0
-14:24:11 ✅ OK omc 🏷️ tag done
 14:24:11 ✅ OK omc 📝 commit committed hash=3691ad8 signed=true
+14:24:11 ℹ️ INFO omc 🏷️ tag tagging v1.0.0
 14:24:11 ✅ OK omc 🏷️ tag tagged tag=v1.0.0 hash=3691ad8 signed=true
 
 $ git show --stat --oneline HEAD
@@ -294,44 +294,44 @@ $ export OMC_PUSH_KEY_PATH=~/.ssh/id_ed25519
 $ omc
 ...
 14:25:02 ✅ OK omc 🏷️ tag tagged tag=v1.0.1 hash=3691ad8 signed=true
-14:25:02 ℹ️ INFO omc 🚀 push pushing commit and tags to remote
-14:25:03 ✅ OK omc 🚀 push done
-14:25:03 ✅ OK omc 🚀 push pushed remote=origin branch=main tags=true
+14:25:02   🚀 push
+14:25:02 ┌─ ℹ️ INFO omc 🚀 push pushing commit and tags to remote
+14:25:03 └─ ✅ OK omc 🚀 push pushed remote=origin branch=main tags=true
 ```
 
 Piped or non-interactive output (CI logs, captured tests) automatically falls
-back to the same structured, greppable line format without color codes:
+back to the same structured, greppable line format:
 
 ```console
 $ omc 2>&1 | cat
-12:04:07 INFO omc omc v0.1.31
-12:04:07 INFO omc config detected environment count=2 OMC_SIGN_KEY_PATH=~/.ssh/agent OLLAMA_DESC_URL=http://127.0.0.1:11434
-12:04:07 INFO omc config verified config count=2 sign_key=valid=true ollama=configured=true
-12:04:07 INFO omc open detecting repository
-12:04:07 OK omc open done
-12:04:07 INFO omc stage staging all changes
-12:04:07 OK omc stage done
-12:04:07 INFO omc diff reading staged diff
-12:04:07 OK omc diff done
-12:04:07 INFO omc diff changed files count=2
+12:04:07 ℹ️ INFO omc omc v0.1.38
+12:04:07 ℹ️ INFO omc config detected environment count=2 OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519 OLLAMA_DESC_URL=http://127.0.0.1:11434
+12:04:07 ℹ️ INFO omc config verified config count=2 sign_key=valid=true ollama=configured=true
+12:04:07 ℹ️ INFO omc 📂 open detecting repository
+12:04:07 ✅ OK omc 📂 open done
+12:04:07 ℹ️ INFO omc repo detected repository context dir=/home/ada/demo latest_tag=v0.3.8 origin_url=git@github.com:ada/demo.git
+12:04:07 ℹ️ INFO omc 📥 stage staging all changes
+12:04:07 ✅ OK omc 📥 stage done
+12:04:07 ℹ️ INFO omc 🔍 diff reading staged diff
+12:04:07 ✅ OK omc 🔍 diff done
+12:04:07 ℹ️ INFO omc 🔍 diff changed files count=2
   - internal/ollama/ollama.go
   - cmd/omc/main.go
-12:04:07 INFO omc ollama probing local ollama at http://127.0.0.1:11434
-12:04:07 OK omc ollama done
-12:04:08 INFO omc ollama generating commit message
-12:04:09 INFO omc ollama condensing to TL;DR
-12:04:09 INFO omc msg subject: sign commit payloads with git's SSH signature format
-12:04:09 INFO omc msg body:
+12:04:07 ℹ️ INFO omc 🤖 ollama probing local ollama at http://127.0.0.1:11434
+12:04:07 ✅ OK omc 🤖 ollama done
+12:04:08 ℹ️ INFO omc 🤖 ollama generating commit message
+12:04:09 ℹ️ INFO omc 🤖 ollama condensing to TL;DR
+12:04:09 ℹ️ INFO omc 💬 msg subject: sign commit payloads with git's SSH signature format
+12:04:09 ℹ️ INFO omc 💬 msg body:
  - Adds an armored BEGIN SSH SIGNATURE header to the commit object...
-12:04:09 INFO omc load key loading ssh signing key
-12:04:09 OK omc load key done
-12:04:09 INFO omc sign signing commit with ssh key key=~/.ssh/agent
-12:04:09 INFO omc commit committing as Ada Lovelace <ada@example.com> (signed)
-12:04:10 OK omc commit done
-12:04:10 OK omc commit committed hash=9d3f2ab signed=true
-12:04:10 INFO omc tag bumping semver patch
-12:04:10 OK omc tag done
-12:04:10 OK omc tag tagged tag=v0.3.9 hash=9d3f2ab signed=true
+12:04:09 ℹ️ INFO omc 🔑 load key loading ssh signing key
+12:04:09 ✅ OK omc 🔑 load key done
+12:04:09 ℹ️ INFO omc signing with ~/.ssh/id_ed25519 (ssh-ed25519)
+12:04:09 ℹ️ INFO omc ✍️ sign signing commit with ssh key key=~/.ssh/id_ed25519
+12:04:09 ℹ️ INFO omc 📝 commit committing as Ada Lovelace <ada@example.com> (signed)
+12:04:10 ✅ OK omc 📝 commit committed hash=9d3f2ab signed=true
+12:04:10 ℹ️ INFO omc 🏷️ tag bumping semver patch
+12:04:10 ✅ OK omc 🏷️ tag tagged tag=v0.3.9 hash=9d3f2ab signed=true
 ```
 
 Every field is a separate, greppable token — `tag=v0.3.9`, `hash=9d3f2ab`,
@@ -680,15 +680,15 @@ the identity fallback; nothing else depends on them.
 │ omc (pure Go, no git binary, no CLI args)                    │
 │                                                              │
 │  1. find enclosing repo  (go-git PlainOpen, walk up)         │
+│  1b. report repo context (dir, remotes, latest tag)          │
 │  2. stage all            (Worktree.AddWithOptions All)       │
 │  3. build staged diff    (HEAD tree → index tree)            │
 │  4. optional: Ollama two-pass message generation             │
 │  5. optional: SSH sign   (hiddeco/sshsig, "git" ns, sha512)  │
 │  5b. optional: smartcard touch countdown (FIDO2 sk keys)    │
 │  6. create commit        (object.Commit, advance HEAD)       │
-│  7. print result         (structured, timestamped log line)  │
-│  8. auto-tag             (latest v*.*.* → patch+1, signed)   │
-│  9. optional push         (OMC_PUSH_KEY_PATH → git push --tags)│
+│  7. auto-tag             (latest v*.*.* → patch+1, signed)   │
+│  8. optional push         (OMC_PUSH_KEY_PATH → git push --tags)│
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -707,13 +707,15 @@ history inspection to the user.
 ```
 cmd/omc/               entry point (env → pipeline → output)
 internal/config/       config.FromEnv() reads the env vars
-internal/gitops/       PlainOpen detection, StageAll, StagedDiff, Commit,
-                       SignedCommit, ResolveIdentity, index→tree writer,
-                       semver tag discovery, CreateTag, SignedTag,
-                       PushToRemote
-internal/sign/         sign.Load(keyPath), signer.Sign(payload) → armored SSH sig
-internal/ollama/       Client.Available(), DescribeDetail(), SummarizeTLDR()
-internal/output/       UI: stdout = structured results, stderr = structured diagnostics
+internal/gitops/       PlainOpen, StageAll, StagedDiff, Commit,
+                       SignedCommit, ResolveIdentity, Scout,
+                       index→tree writer, semver tag discovery,
+                       CreateTag, SignedTag, PushToRemote
+internal/sign/         sign.Load, sign.SecurityKeySigner,
+                       signer.Sign → armored SSH sig; FIDO2 detection
+internal/ollama/       Client.Available, DescribeDetail, SummarizeTLDR
+internal/output/       UI: stdout = structured results, stderr = diagnostics;
+                       animated scramble spinner, touch countdown, log groups
 ```
 
 </details>
@@ -777,12 +779,11 @@ MIT. See [LICENSE](LICENSE).
 
 <div align="center">
 
-<sub>Built with [go-git] · [charmbracelet/bubbles] · [lipgloss] · [hiddeco/sshsig] · [Ollama]</sub>
+<sub>Built with [go-git] · [lipgloss] · [hiddeco/sshsig] · [Ollama]</sub>
 
 </div>
 
 [Ollama]: https://ollama.com
 [go-git]: https://github.com/go-git/go-git
-[charmbracelet/bubbles]: https://github.com/charmbracelet/bubbles
 [lipgloss]: https://github.com/charmbracelet/lipgloss
 [hiddeco/sshsig]: https://github.com/hiddeco/sshsig

@@ -18,4 +18,4 @@ package version
 // Version is the program version. Keep this in sync with the latest git
 // tag (see AGENTS.md "Release / version stamping"). It may be overridden
 // at link time via the linker -X flag.
-var Version = "v0.1.38"
+var Version = "v0.1.39"
