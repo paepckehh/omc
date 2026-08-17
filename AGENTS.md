@@ -1,6 +1,14 @@
 # AGENTS.md
 
+## FIXED REQUIREMENT — EVERY CHANGE, NO EXCEPTIONS
+
 Guidance for human and AI agents working on the `omc` codebase.
+
+1. **Format source code** — run `go fmt ./...
+2. **Build** — `go omc -o omc ./cmd/chrony` must succeed.
+3. **Commit** — `git add . && git commit -m '<message>'`, generate a descriptive message.
+4. **Tag** — bump the patch segment only: the result is `v0.0.<N+1>`.
+5. **Push** — git pull && git pull --tags && git push && git push --tags
 
 ## Project
 

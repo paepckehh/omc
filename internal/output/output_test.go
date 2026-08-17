@@ -651,8 +651,25 @@ func TestNestedGroupHeaderIndent(t *testing.T) {
 	if !strings.Contains(got, "child") || !strings.Contains(got, "parent") {
 		t.Errorf("nested header missing, got: %q", got)
 	}
-	if !strings.HasPrefix(stripANSI(err.String()), "  parent\n┌─   child") {
-		t.Errorf("child header must be prefixed with the parent's first-line connector, got: %q", got)
+	// Headers are now timestamped structured lines: each header begins with
+	// a HH:MM:SS timestamp. The parent header is the top-level form
+	// (timestamp + 3 spaces + title); the child header carries the parent's
+	// first-line connector (┌─) before its title.
+	lines := strings.Split(got, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 header lines, got: %q", got)
+	}
+	// Both headers must start with an 8-char HH:MM:SS timestamp.
+	for i := range 2 {
+		if len(lines[i]) < 8 || lines[i][2] != ':' || lines[i][5] != ':' {
+			t.Errorf("header line %d missing HH:MM:SS timestamp prefix, got: %q", i, lines[i])
+		}
+	}
+	if !strings.Contains(lines[0], "parent") {
+		t.Errorf("parent header missing title, got: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "┌─") || !strings.Contains(lines[1], "child") {
+		t.Errorf("child header must carry parent connector and title, got: %q", lines[1])
 	}
 }
 

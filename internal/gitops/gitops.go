@@ -53,6 +53,47 @@ func Open() (*git.Repository, *git.Worktree, error) {
 	return repo, wt, nil
 }
 
+// RepoContext holds the diagnostic metadata about the opened repository shown
+// right after the open step succeeds: the containing directory (the worktree
+// root, where .git lives), the configured remotes (name → URLs, used for both
+// fetch and push unless a remote configures separate push URLs), and the
+// highest semver tag detected. Each field is best-effort: when something
+// cannot be read it is left empty and the caller emits a "(none)" placeholder.
+type RepoContext struct {
+	// Dir is the worktree root path (the containing directory for .git).
+	Dir string
+	// Remotes maps each configured remote name to its URL list. go-git stores
+	// the fetch URLs in RemoteConfig.URLs; the first URL is used for fetch
+	// and all of them are tried for push (matching git's behavior when no
+	// separate pushurl is set).
+	Remotes map[string][]string
+	// LatestTag is the highest semver tag name (with leading "v"), or empty
+	// when no semver tag exists.
+	LatestTag string
+}
+
+// Scout gathers the repository context metadata for the startup diagnostic
+// shown right after the open step. It never returns an error: every piece is
+// best-effort, and a failure reading one field leaves it empty so the caller
+// can emit a "(none)" placeholder without aborting the pipeline.
+func Scout(repo *git.Repository, wt *git.Worktree) RepoContext {
+	ctx := RepoContext{Remotes: map[string][]string{}}
+	if wt != nil && wt.Filesystem != nil {
+		ctx.Dir = wt.Filesystem.Root()
+	}
+	if repo != nil {
+		if cfg, err := repo.Config(); err == nil {
+			for name, r := range cfg.Remotes {
+				if len(r.URLs) > 0 {
+					ctx.Remotes[name] = r.URLs
+				}
+			}
+		}
+		ctx.LatestTag, _ = LatestSemverTag(repo)
+	}
+	return ctx
+}
+
 // StageAll performs the equivalent of "git add -A": every tracked, modified
 // and untracked file in the working tree is added to the index, including
 // deletions.

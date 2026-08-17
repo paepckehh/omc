@@ -72,7 +72,10 @@ func run() int {
 		repo *git.Repository
 		wt   *git.Worktree
 	)
-	ui.BeginGroup("📂 preparing repository", 3)
+	// The "preparing repository" group covers the open step, the repo
+	// context diagnostic, the stage step, and the diff step (4 structured
+	// lines on a TTY).
+	ui.BeginGroup("📂 preparing repository", 4)
 	if err := ui.Step("open", "detecting repository", func() error {
 		r, w, err := gitops.Open()
 		if err != nil {
@@ -85,6 +88,12 @@ func run() int {
 		ui.Error(err)
 		return 1
 	}
+	// Emit the repo context diagnostic: containing directory, latest
+	// semver tag, and the configured remotes (push/pull targets). This is
+	// best-effort — Scout never returns an error and missing fields are
+	// rendered as "(none)" so the line always reads cleanly.
+	rc := gitops.Scout(repo, wt)
+	ui.RepoContextNotice(rc.Dir, rc.LatestTag, rc.Remotes)
 
 	// 2. Stage everything ("git add -A").
 	if err := ui.Step("stage", "staging all changes", func() error {

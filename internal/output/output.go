@@ -38,6 +38,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -278,19 +279,26 @@ func (u *UI) BeginGroup(title string, lineCount int) {
 
 // renderGroupHeader prints the colored header of the group just pushed,
 // prefixed with the parent tree connectors so nested group headers line up
-// like the records that follow them.
+// like the records that follow them. The header is a structured, timestamped
+// line: it carries the same leading timestamp as every structured record so
+// the whole tree reads as one consistent log. The parent connectors (when
+// nested) mirror the position the child records will occupy, and the title
+// replaces the level/brand/step tokens a record would carry at that depth.
 func (u *UI) renderGroupHeader() {
-	indent := ""
+	ts := u.styles.timestamp.Render(now())
+	top := u.groups[len(u.groups)-1]
+	title := u.styles.step.Render(top.title)
 	if n := len(u.groups); n > 1 {
 		var b strings.Builder
 		for i := 0; i < n-1; i++ {
 			b.WriteString(u.groupTree(u.groups[i]))
 			b.WriteByte(' ')
 		}
-		indent = b.String()
+		line := fmt.Sprintf("%s %s  %s", ts, b.String(), title)
+		fmt.Fprintln(u.Err, line)
+		return
 	}
-	top := u.groups[len(u.groups)-1]
-	line := indent + "  " + u.styles.step.Render(top.title)
+	line := fmt.Sprintf("%s   %s", ts, title)
 	fmt.Fprintln(u.Err, line)
 }
 
@@ -868,6 +876,42 @@ func (u *UI) ConfigNotice(detected, verified []Field) {
 	}
 }
 
+// RepoContextNotice emits the repository context diagnostic shown right
+// after the open step succeeds: the containing directory (worktree root,
+// where .git lives), the latest semver tag detected, and the configured
+// remotes (name → URLs). The remotes are emitted as one field per URL with a
+// stable, sorted key (<remote>_url, or <remote>_url_<i> when a remote has
+// multiple URLs) so consumers can grep push/pull targets individually.
+// Emitted as a structured INFO record with the "repo" step so it lines up
+// in the "preparing repository" group tree.
+func (u *UI) RepoContextNotice(dir, latestTag string, remotes map[string][]string) {
+	fields := []Field{F("dir", dir)}
+	if latestTag == "" {
+		fields = append(fields, F("latest_tag", "(none)"))
+	} else {
+		fields = append(fields, F("latest_tag", latestTag))
+	}
+	names := make([]string, 0, len(remotes))
+	for n := range remotes {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		fields = append(fields, F("remotes", "(none)"))
+	}
+	for _, n := range names {
+		urls := remotes[n]
+		for i, url := range urls {
+			key := n + "_url"
+			if len(urls) > 1 {
+				key = fmt.Sprintf("%s_url_%d", n, i)
+			}
+			fields = append(fields, F(key, url))
+		}
+	}
+	u.emit(u.Err, "INFO", "repo", "detected repository context", fields...)
+}
+
 // SigningNotice renders the signing-on / signing-off notice line.
 func (u *UI) SigningNotice(keyPath string, enabled bool) {
 	if enabled {
@@ -1086,18 +1130,29 @@ func (u *UI) TouchConfirmed() {
 
 	elapsedStr := elapsed.String()
 	if u.tty {
+		// Render the confirmation/timeout line as a timestamped, tree-aligned
+		// line so it is part of the structured log tree (matching the
+		// structured OK/WARN record emitted just below). The tree connector
+		// prefix mirrors the current group state without consuming a line
+		// from any group's budget — the structured emit below owns the
+		// budget decrement.
+		ts := u.styles.timestamp.Render(now())
+		tree := ""
+		if u.inGroup() {
+			tree = " " + u.renderGroupedTree()
+		}
 		if timedOut {
 			msg := lipgloss.NewStyle().
 				Bold(true).
 				Foreground(palette.err).
 				Render("⏰ touch timed out, waiting for security key")
-			fmt.Fprintf(u.Err, "\r\033[K%s\n", msg)
+			fmt.Fprintf(u.Err, "\r\033[K%s%s %s\n", ts, tree, msg)
 		} else {
 			confirm := lipgloss.NewStyle().
 				Bold(true).
 				Foreground(palette.success).
 				Render("💛 touch confirmed, thank you!")
-			fmt.Fprintf(u.Err, "\r\033[K%s\n", confirm)
+			fmt.Fprintf(u.Err, "\r\033[K%s%s %s\n", ts, tree, confirm)
 		}
 	}
 
