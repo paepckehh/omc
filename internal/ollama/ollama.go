@@ -13,12 +13,14 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"paepcke.de/omc/internal/llm"
 )
 
 // DefaultModel is used when OLLAMA_DESC_MODEL is empty.
 const DefaultModel = "llama3.2"
 
-// Client talks to a single Ollama REST API instance.
+// Client talks to a single Ollama REST API instance. It implements llm.Generator.
 type Client struct {
 	baseURL string
 	model   string
@@ -56,20 +58,13 @@ func (c *Client) Available(ctx context.Context) bool {
 // DescribeDetail returns a detailed, conversational commit message explaining
 // the staged diff.
 func (c *Client) DescribeDetail(ctx context.Context, diff string, diffStat string) (string, error) {
-	prompt := "You are a git commit message assistant.\n" +
-		"Write a detailed commit message explaining what changed and why, based only on the diff below.\n" +
-		"Use plain markdown bullets. Be specific. Do not mention this prompt.\n\n" +
-		"DIFF STAT:\n" + diffStat + "\n\nDIFF:\n" + diff
-	return c.chat(ctx, prompt)
+	return c.chat(ctx, llm.DetailPrompt(diff, diffStat))
 }
 
 // SummarizeTLDR condenses a detailed commit message into a single
 // TL;DR-style line suitable as a git commit subject.
 func (c *Client) SummarizeTLDR(ctx context.Context, detail string) (string, error) {
-	prompt := "Summarize the following git commit message into one TL;DR line " +
-		"(max 72 chars, no leading 'TL;DR', no trailing period, imperative mood).\n\n" +
-		detail
-	return c.chat(ctx, prompt)
+	return c.chat(ctx, llm.TLDRPrompt(detail))
 }
 
 func (c *Client) chat(ctx context.Context, prompt string) (string, error) {

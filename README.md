@@ -63,7 +63,7 @@ Point `OMC_SIGN_KEY_PATH` at an SSH private key and the commit carries an armore
 <td width="50%" valign="top">
 
 ### 🤖 AI commit messages
-With `OLLAMA_DESC_URL` set, the staged diff is sent to your **local** model twice: once for a rich explanatory body, once to condense it into a one-line, imperative TL;DR. Your code never leaves your machine.
+With `OLLAMA_DESC_URL` set, the staged diff is sent to your **local** model twice: once for a rich explanatory body, once to condense it into a one-line, imperative TL;DR. Your code never leaves your machine. When Ollama is not configured or unreachable, an **OpenAI-compatible** endpoint (`OPENAPI_DESC_*`) is used as a fallback with the same prompts.
 
 </td>
 </tr>
@@ -77,7 +77,7 @@ With `OLLAMA_DESC_URL` set, the staged diff is sent to your **local** model twic
 <td width="50%" valign="top">
 
 ### 🛡️ Always does the right, minimal thing
-No repo → clear error. No Ollama → `update`. No key → unsigned. It never leaves a task half-done over infrastructure.
+No repo → clear error. No Ollama → try the OpenAI-compatible fallback → `update`. No key → unsigned. It never leaves a task half-done over infrastructure.
 
 </td>
 </tr>
@@ -470,6 +470,9 @@ omc
 | `OMC_SIGN_KEY_PATH` | Path to an SSH **private** key. When set and valid, the commit is SSH-signed. A **FIDO2 security-key handle** (`id_ed25519_sk` / `id_ecdsa_sk`) is supported too: omc signs via the ssh-agent and your smartcard. If set but unusable, warns and commits unsigned. |
 | `OLLAMA_DESC_URL` | Base URL of a local Ollama REST API, e.g. `http://127.0.0.1:11434`. When set and reachable, generates the commit message from the staged diff. |
 | `OLLAMA_DESC_MODEL` | Ollama model name (optional). Defaults to `llama3.2`. |
+| `OPENAPI_DESC_URL` | Base URL of an **OpenAI-compatible** REST API (any endpoint speaking `/chat/completions` + `/models`), e.g. `http://host:11434/v1`. Used as a **fallback** when Ollama is not configured or unreachable. The same prompts and response handling apply. |
+| `OPENAPI_DESC_MODEL` | Model name for the OpenAI-compatible endpoint (optional). Defaults to `gpt-3.5-turbo`. |
+| `OPENAPI_DESC_TOKEN` | Bearer token sent as `Authorization` to the OpenAI-compatible endpoint (optional). Some local endpoints accept a placeholder. The value is never printed; only `(set)` is reported. |
 | `OMC_NAME` | Commit author/committer name (optional). Falls back to git config, then `OMC, Git Commiter`. |
 | `OMC_EMAIL` | Commit author/committer email (optional). Falls back to git config, then `git@omc.local`. |
 | `OMC_SUBJECT` | Override the commit subject. When set, **no LLM generation runs**. See [Message & tag overrides](#-message--tag-overrides). |
@@ -496,6 +499,14 @@ When `OLLAMA_DESC_URL` is set **and** the server answers `/api/tags`:
 3. That message is sent back in a fresh request, asking for a one-line TL;DR
    (max 72 chars, imperative mood).
 4. The TL;DR becomes the subject; the full details follow below it.
+
+When Ollama is **not** configured or unreachable, `omc` falls back to an
+**OpenAI-compatible** endpoint (`OPENAPI_DESC_URL`): it probes `/models`
+(with the `OPENAPI_DESC_TOKEN` bearer token when set) and, on success, runs the
+same two-pass generation against `/chat/completions`. The prompts and the
+response handling are identical to the Ollama path, so commit messages are
+comparable across backends. Ollama is always preferred (local-first); the
+OpenAI-compatible endpoint is only the fallback.
 
 The final message format is:
 
@@ -683,7 +694,8 @@ the identity fallback; nothing else depends on them.
 │  1b. report repo context (dir, remotes, latest tag)          │
 │  2. stage all            (Worktree.AddWithOptions All)       │
 │  3. build staged diff    (HEAD tree → index tree)            │
-│  4. optional: Ollama two-pass message generation             │
+│  4. optional: LLM two-pass message generation             │
+│     (Ollama, fallback to OpenAI-compatible endpoint)     │
 │  5. optional: SSH sign   (hiddeco/sshsig, "git" ns, sha512)  │
 │  5b. optional: smartcard touch countdown (FIDO2 sk keys)    │
 │  6. create commit        (object.Commit, advance HEAD)       │
@@ -714,6 +726,8 @@ internal/gitops/       PlainOpen, StageAll, StagedDiff, Commit,
 internal/sign/         sign.Load, sign.SecurityKeySigner,
                        signer.Sign → armored SSH sig; FIDO2 detection
 internal/ollama/       Client.Available, DescribeDetail, SummarizeTLDR
+internal/openai/       OpenAI-compatible fallback (same Generator contract)
+internal/llm/         shared prompts + Generator interface for all backends
 internal/output/       UI: stdout = structured results, stderr = diagnostics;
                        animated scramble spinner, touch countdown, log groups
 ```
@@ -731,8 +745,9 @@ places a human isn't watching:
 - **Hookable** — drop it in a `pre-commit` hook or a global `alias commit=omc`.
 - **Composable** — nothing to remember, nothing to prompt for, plugs straight into
   the non-interactive `$PROMPT_COMMAND` / agent shells where flags are a liability.
-- **Air-gapped by default** — the only network call is to your own Ollama, so the
-  tool ships no telemetry and phones no home.
+- **Air-gapped by default** — the only network call is to your own Ollama (or
+  an OpenAI-compatible endpoint you configure), so the tool ships no telemetry
+  and phones no home.
 
 ---
 

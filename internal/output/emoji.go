@@ -51,7 +51,8 @@ var actionIcons = map[string]string{
 	"open":     "📂",  // repository detection
 	"stage":    "📥",  // staging changes
 	"diff":     "🔍",  // reading the staged diff
-	"ollama":   "🤖",  // LLM message generation
+	"ollama":   "🤖",  // LLM message generation (Ollama backend)
+	"openai":   "🧠",  // LLM message generation (OpenAI-compatible backend)
 	"load key": "🔑",  // SSH signing key load
 	"commit":   "📝",  // creating the commit
 	"tag":      "🏷️", // semver tagging

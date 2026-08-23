@@ -10,6 +10,9 @@ func TestFromEnv(t *testing.T) {
 	t.Setenv("OMC_SIGN_KEY_PATH", "/keys/id_ed25519")
 	t.Setenv("OLLAMA_DESC_URL", "http://127.0.0.1:11434")
 	t.Setenv("OLLAMA_DESC_MODEL", "qwen2.5:7b")
+	t.Setenv("OPENAPI_DESC_URL", "http://10.0.0.1:8080/v1")
+	t.Setenv("OPENAPI_DESC_MODEL", "gpt-oss")
+	t.Setenv("OPENAPI_DESC_TOKEN", "tok-abc")
 	t.Setenv("OMC_NAME", "Jane Doe")
 	t.Setenv("OMC_EMAIL", "jane@example.com")
 	t.Setenv("OMC_PUSH_KEY_PATH", "/keys/id_push")
@@ -23,6 +26,15 @@ func TestFromEnv(t *testing.T) {
 	}
 	if c.OllamaModel != "qwen2.5:7b" {
 		t.Errorf("OllamaModel = %q, want qwen2.5:7b", c.OllamaModel)
+	}
+	if c.OpenAPIURL != "http://10.0.0.1:8080/v1" {
+		t.Errorf("OpenAPIURL = %q, want http://10.0.0.1:8080/v1", c.OpenAPIURL)
+	}
+	if c.OpenAPIModel != "gpt-oss" {
+		t.Errorf("OpenAPIModel = %q, want gpt-oss", c.OpenAPIModel)
+	}
+	if c.OpenAPIToken != "tok-abc" {
+		t.Errorf("OpenAPIToken = %q, want tok-abc", c.OpenAPIToken)
 	}
 	if c.Name != "Jane Doe" {
 		t.Errorf("Name = %q, want Jane Doe", c.Name)
@@ -39,12 +51,17 @@ func TestFromEnvEmpty(t *testing.T) {
 	t.Setenv("OMC_SIGN_KEY_PATH", "")
 	t.Setenv("OLLAMA_DESC_URL", "")
 	t.Setenv("OLLAMA_DESC_MODEL", "")
+	t.Setenv("OPENAPI_DESC_URL", "")
+	t.Setenv("OPENAPI_DESC_MODEL", "")
+	t.Setenv("OPENAPI_DESC_TOKEN", "")
 	t.Setenv("OMC_NAME", "")
 	t.Setenv("OMC_EMAIL", "")
 	t.Setenv("OMC_PUSH_KEY_PATH", "")
 
 	c := FromEnv()
-	if c.KeyPath != "" || c.OllamaURL != "" || c.OllamaModel != "" || c.Name != "" || c.Email != "" || c.PushKeyPath != "" {
+	if c.KeyPath != "" || c.OllamaURL != "" || c.OllamaModel != "" ||
+		c.OpenAPIURL != "" || c.OpenAPIModel != "" || c.OpenAPIToken != "" ||
+		c.Name != "" || c.Email != "" || c.PushKeyPath != "" {
 		t.Errorf("expected all empty, got %+v", c)
 	}
 }

@@ -22,7 +22,8 @@ behavior is controlled by environment variables.
 Core promise: inside a git working tree it performs the equivalent of
 `git add -A && git commit -asm update` — with optional SSH commit
 signing and optional LLM-generated commit messages via a local Ollama
-instance. Every line of output is a structured, timestamped log record.
+instance, or an OpenAI-compatible endpoint as a fallback. Every line of
+output is a structured, timestamped log record.
 
 For user-facing documentation (features, quick start, demos, env var
 table, detailed override rules), see **README.md**. This file is the
@@ -39,7 +40,9 @@ developer contract.
   which talks to the smartcard; no agent required for ordinary software
   keys.
 - **Always degrade, never block.** If Ollama is unreachable or the LLM
-  call fails, fall back to `update`. If the key file is missing/invalid
+  call fails, fall back to the OpenAI-compatible endpoint
+  (`OPENAPI_DESC_*`); if that is also unavailable or fails, fall back to
+  `update`. If the key file is missing/invalid
   when configured, log a warning and commit unsigned. A configured
   security-key handle without a matching ssh-agent identity degrades the
   same way. If `OMC_PUSH_KEY_PATH` is set but unusable, or the push fails,
@@ -50,7 +53,8 @@ developer contract.
 ## Where things live
 
 ```
-cmd/omc/main.go       pipeline: repo → stage → diff → (overrides|ollama) → (sign) → commit → tag → (push)
+cmd/omc/main.go       pipeline: repo → stage → diff → (overrides|llm) → (sign) → commit → tag → (push)
+                      llm = Ollama first, OpenAI-compatible endpoint fallback (llm.Generator)
 internal/config/      config.FromEnv() reads the env vars
 internal/gitops/      PlainOpen, StageAll, StagedDiff, Commit, SignedCommit,
                       ResolveIdentity, Scout, index→tree writer,
@@ -58,7 +62,9 @@ internal/gitops/      PlainOpen, StageAll, StagedDiff, Commit, SignedCommit,
                       ValidSemverTag, NormalizeTag, PushToRemote
 internal/sign/        sign.Load, sign.SecurityKeySigner, signer.Sign → armored SSH sig;
                       FIDO2 detection & agent delegation (DetectKind, IsSecurityKeyPath, HandleMatches)
-internal/ollama/      Client.Available, DescribeDetail, SummarizeTLDR
+internal/llm/         shared commit-message prompts + Generator interface (all backends)
+internal/ollama/      Client.Available, DescribeDetail, SummarizeTLDR (implements llm.Generator)
+internal/openai/      OpenAI-compatible fallback: /chat/completions + /models (implements llm.Generator)
 internal/output/      UI: stdout = structured results, stderr = structured diagnostics;
                       animated scramble spinner, touch countdown, nested log groups
 internal/version/     Version string: hardwired semver, overridable via linker -X
@@ -147,7 +153,7 @@ config. Config files are only consulted for the identity fallback.
 
 ## Testing
 
-- `go test ./...` — full suite (config, sign, ollama, gitops, output, e2e).
+- `go test ./...` — full suite (config, sign, ollama, openai, gitops, output, e2e).
 - `-short` skips the binary e2e test that compiles the CLI.
 - `make test` / `make vet` are the shortcuts.
 
@@ -159,6 +165,7 @@ config. Config files are only consulted for the identity fallback.
 4. `go vet ./...` passes
 5. `internal/version/version.go` `Version` matches the latest git tag.
 6. Behavior honored: repo detection + context diagnostic, stage-all,
-   optional signing, optional Ollama message generation, structured
-   timestamped log output (starting with the version banner), and auto
-   semver tagging of the new commit (signed when a key is configured).
+   optional signing, optional LLM message generation (Ollama, with an
+   OpenAI-compatible endpoint fallback), structured timestamped log
+   output (starting with the version banner), and auto semver tagging of
+   the new commit (signed when a key is configured).

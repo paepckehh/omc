@@ -21,6 +21,17 @@ type Config struct {
 	// OllamaModel selects the model hosted by Ollama. Optional; the
 	// server's default model is used when empty.
 	OllamaModel string
+	// OpenAPIURL is the base URL of an OpenAI-compatible REST API
+	// (e.g. http://host:port/v1). Used as a fallback when Ollama is
+	// not configured or unreachable. Optional: empty disables it.
+	OpenAPIURL string
+	// OpenAPIModel selects the model exposed by the OpenAI-compatible
+	// endpoint. Optional; the endpoint's default is used when empty.
+	OpenAPIModel string
+	// OpenAPIToken is the bearer token sent as Authorization to the
+	// OpenAI-compatible endpoint. Optional; some local endpoints
+	// accept a placeholder token.
+	OpenAPIToken string
 	// Name is the commit author/committer name. Optional; falls back to
 	// the repository's git config and then a built-in default.
 	Name string
@@ -49,15 +60,18 @@ type Config struct {
 // FromEnv loads the configuration from the process environment.
 func FromEnv() Config {
 	return Config{
-		KeyPath:     expandTilde(os.Getenv("OMC_SIGN_KEY_PATH")),
-		OllamaURL:   os.Getenv("OLLAMA_DESC_URL"),
-		OllamaModel: os.Getenv("OLLAMA_DESC_MODEL"),
-		Name:        os.Getenv("OMC_NAME"),
-		Email:       os.Getenv("OMC_EMAIL"),
-		Subject:     os.Getenv("OMC_SUBJECT"),
-		Message:     os.Getenv("OMC_MESSAGE"),
-		Tag:         os.Getenv("OMC_TAG"),
-		PushKeyPath: expandTilde(os.Getenv("OMC_PUSH_KEY_PATH")),
+		KeyPath:      expandTilde(os.Getenv("OMC_SIGN_KEY_PATH")),
+		OllamaURL:    os.Getenv("OLLAMA_DESC_URL"),
+		OllamaModel:  os.Getenv("OLLAMA_DESC_MODEL"),
+		OpenAPIURL:   os.Getenv("OPENAPI_DESC_URL"),
+		OpenAPIModel: os.Getenv("OPENAPI_DESC_MODEL"),
+		OpenAPIToken: os.Getenv("OPENAPI_DESC_TOKEN"),
+		Name:         os.Getenv("OMC_NAME"),
+		Email:        os.Getenv("OMC_EMAIL"),
+		Subject:      os.Getenv("OMC_SUBJECT"),
+		Message:      os.Getenv("OMC_MESSAGE"),
+		Tag:          os.Getenv("OMC_TAG"),
+		PushKeyPath:  expandTilde(os.Getenv("OMC_PUSH_KEY_PATH")),
 	}
 }
 

@@ -20,6 +20,14 @@
 //	                   reachable, the staged diff is turned into an LLM
 //	                   commit message (detailed body + TL;DR subject)
 //	OLLAMA_DESC_MODEL  Ollama model name; optional, defaults to llama3.2
+//	OPENAPI_DESC_URL   base URL of an OpenAI-compatible REST API (any
+//	                   endpoint speaking /chat/completions + /models);
+//	                   fallback when Ollama is not configured or unreachable.
+//	                   Same prompts and response handling as Ollama.
+//	OPENAPI_DESC_MODEL  model name for the OpenAI-compatible endpoint;
+//	                   optional, defaults to gpt-3.5-turbo
+//	OPENAPI_DESC_TOKEN  bearer token for the OpenAI-compatible endpoint;
+//	                   optional. Never printed; only "(set)" is reported.
 //	OMC_SUBJECT    override the commit subject; skips LLM generation.
 //	                   See AGENTS.md for the subject/message pairing rules.
 //	OMC_MESSAGE    override the commit body; skips LLM generation.
@@ -50,7 +58,9 @@ import (
 
 	"paepcke.de/omc/internal/config"
 	"paepcke.de/omc/internal/gitops"
+	"paepcke.de/omc/internal/llm"
 	"paepcke.de/omc/internal/ollama"
+	"paepcke.de/omc/internal/openai"
 	"paepcke.de/omc/internal/output"
 	"paepcke.de/omc/internal/sign"
 	"paepcke.de/omc/internal/version"
@@ -140,27 +150,31 @@ func run() int {
 
 	// 4. Resolve the commit message. Environment overrides
 	// (OMC_SUBJECT / OMC_MESSAGE) win over LLM generation: when
-	// either is set, no Ollama call is made. See AGENTS.md for the
-	// pairing rules.
+	// either is set, no LLM call is made. See AGENTS.md for the
+	// pairing rules. When no override is active, LLM backends are
+	// probed in order (Ollama first, then any OpenAI-compatible
+	// endpoint) and the first reachable one generates the message;
+	// the same prompts and response handling apply to every backend.
 	msg := gitops.CommitMessage{Subject: "update"}
 	if override, ok := overrideMessage(cfg); ok {
 		msg = override
 		ui.Info("message override active (OMC_SUBJECT/OMC_MESSAGE)")
-	} else if cfg.OllamaURL != "" {
-		// The two-stage LLM generation is its own nested group: the grasp
-		// probe step (INFO + OK) plus the spinner-phase records. Off a TTY
-		// the group is a no-op and the flat records stay greppable.
-		ui.BeginGroup("💬 message generation", 2) // ollama probe INFO + OK
-		client := ollama.New(cfg.OllamaURL, cfg.OllamaModel)
-		if reachable := ollamaReachable(ui, ctx, client, cfg.OllamaURL); reachable {
+	} else if candidates := resolveGenerators(cfg); len(candidates) > 0 {
+		// The two-stage LLM generation is its own nested group: each
+		// probe is a step (INFO + OK), so the group budget is twice the
+		// number of candidates. Off a TTY the group is a no-op and the
+		// flat records stay greppable.
+		ui.BeginGroup("💬 message generation", 2*len(candidates))
+		gen, step := probeGenerators(ui, ctx, candidates)
+		if gen != nil {
 			var genErr error
-			msg, genErr = generateMessageProgress(ui, ctx, client, diffText, files)
+			msg, genErr = generateMessageProgress(ui, ctx, gen, step, diffText, files)
 			if genErr != nil {
 				ui.Warn("llm message generation failed: %v", genErr)
 				msg = gitops.CommitMessage{Subject: "update"}
 			}
 		} else {
-			ui.Warn("ollama not reachable at %s, using default message", cfg.OllamaURL)
+			ui.Warn("no llm backend reachable, using default message")
 		}
 		ui.EndGroup()
 	}
@@ -357,6 +371,13 @@ func configReport(cfg config.Config) (detected, verified []output.Field) {
 	set("OMC_SIGN_KEY_PATH", cfg.KeyPath)
 	set("OLLAMA_DESC_URL", cfg.OllamaURL)
 	set("OLLAMA_DESC_MODEL", cfg.OllamaModel)
+	set("OPENAPI_DESC_URL", cfg.OpenAPIURL)
+	set("OPENAPI_DESC_MODEL", cfg.OpenAPIModel)
+	// OPENAPI_DESC_TOKEN is a secret: report only that it is set, never its
+	// value, so it cannot leak into captured logs.
+	if strings.TrimSpace(cfg.OpenAPIToken) != "" {
+		detected = append(detected, output.F("OPENAPI_DESC_TOKEN", "(set)"))
+	}
 	set("OMC_NAME", cfg.Name)
 	set("OMC_EMAIL", cfg.Email)
 	set("OMC_SUBJECT", cfg.Subject)
@@ -375,6 +396,9 @@ func configReport(cfg config.Config) (detected, verified []output.Field) {
 	}
 	if cfg.OllamaURL != "" {
 		verified = append(verified, output.F("ollama", "configured=true"))
+	}
+	if cfg.OpenAPIURL != "" {
+		verified = append(verified, output.F("openai", "configured=true"))
 	}
 	return detected, verified
 }
@@ -493,25 +517,68 @@ func shortenSubject(body string) string {
 	return strings.TrimSpace(body)
 }
 
-// ollamaReachable probes Ollama while showing a spinner step. An unreachable
-// Ollama is not a pipeline failure (it is the normal degrade path), so the
-// step is reported as successful either way.
-func ollamaReachable(ui *output.UI, ctx context.Context, client *ollama.Client, url string) bool {
-	var ok bool
-	_ = ui.Step("ollama", "probing local ollama at "+url, func() error {
-		ok = client.Available(ctx)
-		return nil
-	})
-	return ok
+// llmCandidate is a configured LLM backend awaiting a reachability probe.
+type llmCandidate struct {
+	gen  llm.Generator
+	step string // "ollama" or "openai", used for log lines
+	url  string // base URL, used in the probe label
+}
+
+// resolveGenerators builds the ordered list of configured LLM backends. Ollama
+// is preferred (local-first, air-gapped); an OpenAI-compatible endpoint
+// (OPENAPI_DESC_URL) follows as the fallback. When both are configured, Ollama
+// is probed first and the OpenAI-compatible endpoint is only tried when Ollama
+// is not reachable — matching the "Ollama not there or unresponsive → try
+// OpenAI" contract. The list may be empty when neither backend is configured.
+func resolveGenerators(cfg config.Config) []llmCandidate {
+	var out []llmCandidate
+	if cfg.OllamaURL != "" {
+		out = append(out, llmCandidate{
+			gen:  ollama.New(cfg.OllamaURL, cfg.OllamaModel),
+			step: "ollama",
+			url:  cfg.OllamaURL,
+		})
+	}
+	if cfg.OpenAPIURL != "" {
+		out = append(out, llmCandidate{
+			gen:  openai.New(cfg.OpenAPIURL, cfg.OpenAPIModel, cfg.OpenAPIToken),
+			step: "openai",
+			url:  cfg.OpenAPIURL,
+		})
+	}
+	return out
+}
+
+// probeGenerators probes each candidate in order and returns the first
+// reachable one (with its step name for log lines). An unreachable backend is
+// not a pipeline failure (it is the normal degrade path): each probe is a
+// spinner step reported as successful either way, and a warning names the
+// backend that was skipped so the fallback is visible in the log. When no
+// candidate is reachable, nil is returned and the caller falls back to the
+// default subject.
+func probeGenerators(ui *output.UI, ctx context.Context, candidates []llmCandidate) (llm.Generator, string) {
+	for _, c := range candidates {
+		var ok bool
+		_ = ui.Step(c.step, "probing "+c.step+" at "+c.url, func() error {
+			ok = c.gen.Available(ctx)
+			return nil
+		})
+		if ok {
+			return c.gen, c.step
+		}
+		ui.Warn("%s not reachable at %s", c.step, c.url)
+	}
+	return nil, ""
 }
 
 // generateMessageProgress performs the two-step LLM conversation (detailed
 // description, then TL;DR summary) while showing an animated scramble
 // spinner whose label updates per phase. files is the list of changed paths,
 // used as a compact summary so the model can ground its message in the file
-// names without re-reading the whole diff twice.
-func generateMessageProgress(ui *output.UI, ctx context.Context, client *ollama.Client, diff string, files []string) (gitops.CommitMessage, error) {
-	ui.SpinnerStart("ollama", "generating commit message")
+// names without re-reading the whole diff twice. step names the backend
+// ("ollama" or "openai") so the spinner labels the right provider.
+func generateMessageProgress(ui *output.UI, ctx context.Context, gen llm.Generator, step, diff string, files []string) (gitops.CommitMessage, error) {
+	ui.SpinnerStart(step, "generating commit message")
 
 	stat := "(no file changes)"
 	if len(files) > 0 {
@@ -526,14 +593,14 @@ func generateMessageProgress(ui *output.UI, ctx context.Context, client *ollama.
 		stat = b.String()
 	}
 
-	detail, err := client.DescribeDetail(ctx, diff, stat)
+	detail, err := gen.DescribeDetail(ctx, diff, stat)
 	if err != nil {
 		ui.SpinnerStop()
 		return gitops.CommitMessage{}, err
 	}
 	ui.SpinnerUpdate("condensing to TL;DR")
 
-	tldr, err := client.SummarizeTLDR(ctx, detail)
+	tldr, err := gen.SummarizeTLDR(ctx, detail)
 	if err != nil {
 		ui.SpinnerStop()
 		return gitops.CommitMessage{}, err
