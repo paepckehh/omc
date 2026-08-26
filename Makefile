@@ -3,7 +3,10 @@ VERSION ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0-dev
 LDFLAGS := -X paepcke.de/$(PROJECT)/internal/version.Version=$(VERSION)
 TARGETBIN := /nix/persist/bin
 
-all: build
+all: info
+
+info:
+	echo $(PROJECt) $(VERSION)
 
 build:
 	touch $(PROJECT) && rm $(PROJECT)

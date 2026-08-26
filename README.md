@@ -15,8 +15,7 @@ working tree, one 3-letter command does the equivalent of:
 git add -A
 git commit -S -m <generated detailed commit message>
 git tag -s <old_semver+1>
-[opt: git push]
-[opt: git push --tags]
+git push && git push --tags
 ```
 
 It supports agent/human role separation for signed commits, including
