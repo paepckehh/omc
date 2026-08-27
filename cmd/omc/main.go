@@ -20,14 +20,17 @@
 //	                   reachable, the staged diff is turned into an LLM
 //	                   commit message (detailed body + TL;DR subject)
 //	OLLAMA_DESC_MODEL  Ollama model name; optional, defaults to llama3.2
-//	OPENAPI_DESC_URL   base URL of an OpenAI-compatible REST API (any
+//	OPENAPI_URL   base URL of an OpenAI-compatible REST API (any
 //	                   endpoint speaking /chat/completions + /models);
 //	                   fallback when Ollama is not configured or unreachable.
 //	                   Same prompts and response handling as Ollama.
-//	OPENAPI_DESC_MODEL  model name for the OpenAI-compatible endpoint;
+//	                   (OPENAPI_DESC_URL is accepted as a legacy alias.)
+//	OPENAPI_MODEL  model name for the OpenAI-compatible endpoint;
 //	                   optional, defaults to gpt-3.5-turbo
-//	OPENAPI_DESC_TOKEN  bearer token for the OpenAI-compatible endpoint;
+//	                   (OPENAPI_DESC_MODEL is accepted as a legacy alias.)
+//	OPENAPI_TOKEN  bearer token for the OpenAI-compatible endpoint;
 //	                   optional. Never printed; only "(set)" is reported.
+//	                   (OPENAPI_DESC_TOKEN is accepted as a legacy alias.)
 //	OMC_SUBJECT    override the commit subject; skips LLM generation.
 //	                   See AGENTS.md for the subject/message pairing rules.
 //	OMC_MESSAGE    override the commit body; skips LLM generation.
@@ -371,12 +374,12 @@ func configReport(cfg config.Config) (detected, verified []output.Field) {
 	set("OMC_SIGN_KEY_PATH", cfg.KeyPath)
 	set("OLLAMA_DESC_URL", cfg.OllamaURL)
 	set("OLLAMA_DESC_MODEL", cfg.OllamaModel)
-	set("OPENAPI_DESC_URL", cfg.OpenAPIURL)
-	set("OPENAPI_DESC_MODEL", cfg.OpenAPIModel)
-	// OPENAPI_DESC_TOKEN is a secret: report only that it is set, never its
+	set("OPENAPI_URL", cfg.OpenAPIURL)
+	set("OPENAPI_MODEL", cfg.OpenAPIModel)
+	// OPENAPI_TOKEN is a secret: report only that it is set, never its
 	// value, so it cannot leak into captured logs.
 	if strings.TrimSpace(cfg.OpenAPIToken) != "" {
-		detected = append(detected, output.F("OPENAPI_DESC_TOKEN", "(set)"))
+		detected = append(detected, output.F("OPENAPI_TOKEN", "(set)"))
 	}
 	set("OMC_NAME", cfg.Name)
 	set("OMC_EMAIL", cfg.Email)
@@ -526,10 +529,11 @@ type llmCandidate struct {
 
 // resolveGenerators builds the ordered list of configured LLM backends. Ollama
 // is preferred (local-first, air-gapped); an OpenAI-compatible endpoint
-// (OPENAPI_DESC_URL) follows as the fallback. When both are configured, Ollama
-// is probed first and the OpenAI-compatible endpoint is only tried when Ollama
-// is not reachable — matching the "Ollama not there or unresponsive → try
-// OpenAI" contract. The list may be empty when neither backend is configured.
+// (OPENAPI_URL, or the legacy OPENAPI_DESC_URL) follows as the fallback. When
+// both are configured, Ollama is probed first and the OpenAI-compatible
+// endpoint is only tried when Ollama is not reachable — matching the "Ollama
+// not there or unresponsive → try OpenAI" contract. The list may be empty
+// when neither backend is configured.
 func resolveGenerators(cfg config.Config) []llmCandidate {
 	var out []llmCandidate
 	if cfg.OllamaURL != "" {

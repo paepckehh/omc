@@ -58,14 +58,21 @@ type Config struct {
 }
 
 // FromEnv loads the configuration from the process environment.
+//
+// The OpenAI-compatible endpoint accepts two env-var naming conventions:
+//   - OPENAPI_URL / OPENAPI_MODEL / OPENAPI_TOKEN (short, preferred)
+//   - OPENAPI_DESC_URL / OPENAPI_DESC_MODEL / OPENAPI_DESC_TOKEN (legacy)
+//
+// The short form takes precedence; the legacy form is kept for backward
+// compatibility.
 func FromEnv() Config {
 	return Config{
 		KeyPath:      expandTilde(os.Getenv("OMC_SIGN_KEY_PATH")),
 		OllamaURL:    os.Getenv("OLLAMA_DESC_URL"),
 		OllamaModel:  os.Getenv("OLLAMA_DESC_MODEL"),
-		OpenAPIURL:   os.Getenv("OPENAPI_DESC_URL"),
-		OpenAPIModel: os.Getenv("OPENAPI_DESC_MODEL"),
-		OpenAPIToken: os.Getenv("OPENAPI_DESC_TOKEN"),
+		OpenAPIURL:   envOr("OPENAPI_URL", "OPENAPI_DESC_URL"),
+		OpenAPIModel: envOr("OPENAPI_MODEL", "OPENAPI_DESC_MODEL"),
+		OpenAPIToken: envOr("OPENAPI_TOKEN", "OPENAPI_DESC_TOKEN"),
 		Name:         os.Getenv("OMC_NAME"),
 		Email:        os.Getenv("OMC_EMAIL"),
 		Subject:      os.Getenv("OMC_SUBJECT"),
@@ -73,6 +80,19 @@ func FromEnv() Config {
 		Tag:          os.Getenv("OMC_TAG"),
 		PushKeyPath:  expandTilde(os.Getenv("OMC_PUSH_KEY_PATH")),
 	}
+}
+
+// envOr returns the value of the first environment variable that is set and
+// non-empty, falling back to the remaining names in order. This lets omc
+// accept both short (OPENAPI_URL) and legacy (OPENAPI_DESC_URL) names without
+// forcing a migration.
+func envOr(names ...string) string {
+	for _, n := range names {
+		if v := os.Getenv(n); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // expandTilde rewrites a leading "~/" (or a bare "~") to the user's home

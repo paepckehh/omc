@@ -95,7 +95,7 @@ func TestConfigReportMasksToken(t *testing.T) {
 	}
 	detected, verified := configReport(cfg)
 	for _, f := range detected {
-		if f.Key == "OPENAPI_DESC_TOKEN" {
+		if f.Key == "OPENAPI_TOKEN" {
 			if strings.Contains(f.Val, "super-secret-token") {
 				t.Errorf("token value leaked into detected report: %s", f.Val)
 			}
@@ -121,8 +121,8 @@ func TestConfigReportNoTokenWhenEmpty(t *testing.T) {
 	}
 	detected, _ := configReport(cfg)
 	for _, f := range detected {
-		if f.Key == "OPENAPI_DESC_TOKEN" {
-			t.Errorf("did not expect OPENAPI_DESC_TOKEN in detected report when empty")
+		if f.Key == "OPENAPI_TOKEN" {
+			t.Errorf("did not expect OPENAPI_TOKEN in detected report when empty")
 		}
 	}
 }

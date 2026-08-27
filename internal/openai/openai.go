@@ -20,7 +20,7 @@ import (
 	"paepcke.de/omc/internal/llm"
 )
 
-// DefaultModel is used when OPENAPI_DESC_MODEL is empty.
+// DefaultModel is used when OPENAPI_MODEL (or OPENAPI_DESC_MODEL) is empty.
 const DefaultModel = "gpt-3.5-turbo"
 
 // Client talks to a single OpenAI-compatible REST API instance. It

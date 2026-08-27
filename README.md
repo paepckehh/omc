@@ -63,7 +63,7 @@ Point `OMC_SIGN_KEY_PATH` at an SSH private key and the commit carries an armore
 <td width="50%" valign="top">
 
 ### 🤖 AI commit messages
-With `OLLAMA_DESC_URL` set, the staged diff is sent to your **local** model twice: once for a rich explanatory body, once to condense it into a one-line, imperative TL;DR. Your code never leaves your machine. When Ollama is not configured or unreachable, an **OpenAI-compatible** endpoint (`OPENAPI_DESC_*`) is used as a fallback with the same prompts.
+With `OLLAMA_DESC_URL` set, the staged diff is sent to your **local** model twice: once for a rich explanatory body, once to condense it into a one-line, imperative TL;DR. Your code never leaves your machine. When Ollama is not configured or unreachable, an **OpenAI-compatible** endpoint (`OPENAPI_URL` / `OPENAPI_TOKEN`; `OPENAPI_DESC_*` legacy aliases accepted) is used as a fallback with the same prompts.
 
 </td>
 </tr>
@@ -470,9 +470,9 @@ omc
 | `OMC_SIGN_KEY_PATH` | Path to an SSH **private** key. When set and valid, the commit is SSH-signed. A **FIDO2 security-key handle** (`id_ed25519_sk` / `id_ecdsa_sk`) is supported too: omc signs via the ssh-agent and your smartcard. If set but unusable, warns and commits unsigned. |
 | `OLLAMA_DESC_URL` | Base URL of a local Ollama REST API, e.g. `http://127.0.0.1:11434`. When set and reachable, generates the commit message from the staged diff. |
 | `OLLAMA_DESC_MODEL` | Ollama model name (optional). Defaults to `llama3.2`. |
-| `OPENAPI_DESC_URL` | Base URL of an **OpenAI-compatible** REST API (any endpoint speaking `/chat/completions` + `/models`), e.g. `http://host:11434/v1`. Used as a **fallback** when Ollama is not configured or unreachable. The same prompts and response handling apply. |
-| `OPENAPI_DESC_MODEL` | Model name for the OpenAI-compatible endpoint (optional). Defaults to `gpt-3.5-turbo`. |
-| `OPENAPI_DESC_TOKEN` | Bearer token sent as `Authorization` to the OpenAI-compatible endpoint (optional). Some local endpoints accept a placeholder. The value is never printed; only `(set)` is reported. |
+| `OPENAPI_URL` | Base URL of an **OpenAI-compatible** REST API (any endpoint speaking `/chat/completions` + `/models`), e.g. `http://host:11434/v1`. Used as a **fallback** when Ollama is not configured or unreachable. The same prompts and response handling apply. (`OPENAPI_DESC_URL` is accepted as a legacy alias.) |
+| `OPENAPI_MODEL` | Model name for the OpenAI-compatible endpoint (optional). Defaults to `gpt-3.5-turbo`. (`OPENAPI_DESC_MODEL` is accepted as a legacy alias.) |
+| `OPENAPI_TOKEN` | Bearer token sent as `Authorization` to the OpenAI-compatible endpoint (optional). Some local endpoints accept a placeholder. The value is never printed; only `(set)` is reported. (`OPENAPI_DESC_TOKEN` is accepted as a legacy alias.) |
 | `OMC_NAME` | Commit author/committer name (optional). Falls back to git config, then `OMC, Git Commiter`. |
 | `OMC_EMAIL` | Commit author/committer email (optional). Falls back to git config, then `git@omc.local`. |
 | `OMC_SUBJECT` | Override the commit subject. When set, **no LLM generation runs**. See [Message & tag overrides](#-message--tag-overrides). |
@@ -501,8 +501,8 @@ When `OLLAMA_DESC_URL` is set **and** the server answers `/api/tags`:
 4. The TL;DR becomes the subject; the full details follow below it.
 
 When Ollama is **not** configured or unreachable, `omc` falls back to an
-**OpenAI-compatible** endpoint (`OPENAPI_DESC_URL`): it probes `/models`
-(with the `OPENAPI_DESC_TOKEN` bearer token when set) and, on success, runs the
+**OpenAI-compatible** endpoint (`OPENAPI_URL`): it probes `/models`
+(with the `OPENAPI_TOKEN` bearer token when set) and, on success, runs the
 same two-pass generation against `/chat/completions`. The prompts and the
 response handling are identical to the Ollama path, so commit messages are
 comparable across backends. Ollama is always preferred (local-first); the

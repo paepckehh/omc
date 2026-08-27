@@ -41,7 +41,7 @@ developer contract.
   keys.
 - **Always degrade, never block.** If Ollama is unreachable or the LLM
   call fails, fall back to the OpenAI-compatible endpoint
-  (`OPENAPI_DESC_*`); if that is also unavailable or fails, fall back to
+  (`OPENAPI_*`, with `OPENAPI_DESC_*` legacy aliases); if that is also unavailable or fails, fall back to
   `update`. If the key file is missing/invalid
   when configured, log a warning and commit unsigned. A configured
   security-key handle without a matching ssh-agent identity degrades the
