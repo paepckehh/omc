@@ -7,17 +7,34 @@
 // carrying the prompt to its own API and returning the model's text.
 package llm
 
-import "context"
+import (
+	"context"
+	"strings"
+)
+
+// maxSectionLines is the threshold above which a per-file diff section is
+// considered too large to send to the model in full.
+const maxSectionLines = 200
+
+// truncatedSectionLines is the maximum number of lines kept from an
+// oversized section — the first half of this budget is taken from the top
+// of the section and the second half from the bottom, preserving the file
+// header and the overall shape of the change.
+const truncatedSectionLines = 100
 
 // DetailPrompt builds the prompt that asks the model for a detailed,
 // conversational commit message explaining the staged diff. diffStat is a
 // compact file-level summary; diff is the full staged diff. Backends pass
 // these verbatim to their model.
+//
+// The diff is first run through truncateDiff so that no single file section
+// longer than maxSectionLines overwhelms the model's context window: oversized
+// sections are cut to truncatedSectionLines with a visible truncation marker.
 func DetailPrompt(diff, diffStat string) string {
 	return "You are a git commit message assistant.\n" +
 		"Write a detailed commit message explaining what changed and why, based only on the diff below.\n" +
 		"Use plain markdown bullets. Be specific. Do not mention this prompt.\n\n" +
-		"DIFF STAT:\n" + diffStat + "\n\nDIFF:\n" + diff
+		"DIFF STAT:\n" + diffStat + "\n\nDIFF:\n" + truncateDiff(diff)
 }
 
 // TLDRPrompt builds the prompt that condenses a detailed commit message into
@@ -42,4 +59,82 @@ type Generator interface {
 	// SummarizeTLDR condenses a detailed commit message into a single
 	// TL;DR-style line suitable as a git commit subject.
 	SummarizeTLDR(ctx context.Context, detail string) (string, error)
+}
+
+// truncateDiff limits every per-file section of a unified diff to at most
+// truncatedSectionLines lines when the section exceeds maxSectionLines.
+// Sections at or below the threshold are passed through unchanged. A cut
+// section keeps the first and last portions of the change so the model still
+// sees the file header, the hunk markers, and representative context from both
+// the top and bottom of the change. A clearly marked line is inserted at the
+// cut point so the model knows content was elided.
+func truncateDiff(diff string) string {
+	if diff == "" {
+		return diff
+	}
+	lines := strings.Split(diff, "\n")
+
+	var (
+		out       []string
+		start     int
+		inSection bool
+	)
+
+	flush := func(section []string) {
+		if len(section) <= maxSectionLines {
+			out = append(out, section...)
+			return
+		}
+		keep := truncatedSectionLines
+		top := keep / 2
+		bottom := keep - top
+		out = append(out, section[:top]...)
+		out = append(out, "")
+		out = append(out, " ... (diff truncated: section had "+
+			itoa(len(section))+" lines, showing "+itoa(keep)+") ...")
+		out = append(out, "")
+		out = append(out, section[len(section)-bottom:]...)
+	}
+
+	for i, line := range lines {
+		if strings.HasPrefix(line, "diff --git ") {
+			if inSection {
+				flush(lines[start:i])
+			}
+			start = i
+			inSection = true
+		}
+	}
+	if inSection {
+		flush(lines[start:])
+	} else {
+		// No per-file headers: treat the whole text as one section.
+		flush(lines)
+	}
+
+	return strings.Join(out, "\n")
+}
+
+// itoa is a tiny dependency-free int-to-string converter used by truncateDiff
+// so the package stays free of strconv for this trivial formatting need.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
 }
