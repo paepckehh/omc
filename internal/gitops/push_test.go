@@ -128,6 +128,77 @@ func TestPushToRemoteUpToDate(t *testing.T) {
 	_ = bare
 }
 
+// TestPushToRemoteUpToDateBranchPushesPendingTags verifies the stranded-tag
+// bug: when the remote branch is already up to date but a local tag never made
+// it upstream (a previous run pushed the branch but its tag pass failed),
+// PushToRemote must still run the tag pass. The old code returned early on
+// NoErrAlreadyUpToDate from the branch pass, leaving the pending tag local
+// forever — every clean-tree run repeated the early return.
+func TestPushToRemoteUpToDateBranchPushesPendingTags(t *testing.T) {
+	bare := newRemoteBare(t, "omcpt")
+
+	repo, wt, dir := initTestRepo(t)
+	if _, err := repo.CreateRemote(&config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{"omcpt://omc/repos/remote.git"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := Commit(repo, CommitMessage{Subject: "seed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag, err := CreateTag(repo, h, "v0.0.1", "seed",
+		Identity{Name: "Test User", Email: "test@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Recreate the stranded state: the branch was pushed, the tag pass
+	// failed (here: never ran). Push the branch refspec only.
+	remote := git.NewRemote(repo.Storer, &config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{"omcpt://omc/repos/remote.git"},
+	})
+	if err := remote.Push(&git.PushOptions{
+		RemoteName: "origin",
+		RefSpecs:   []config.RefSpec{config.RefSpec("refs/heads/master:refs/heads/master")},
+	}); err != nil {
+		t.Fatalf("seed branch push: %v", err)
+	}
+	if _, err := bare.Storer.Reference(plumbing.NewBranchReferenceName("master")); err != nil {
+		t.Fatalf("remote branch missing after seed push: %v", err)
+	}
+	if _, err := bare.Storer.Reference(tag.Name()); err == nil {
+		t.Fatal("remote already has the tag; test setup is wrong")
+	}
+
+	// The branch is now up to date. PushToRemote must not stop there.
+	res, err := PushToRemote(repo, "")
+	if err != nil {
+		t.Fatalf("PushToRemote: %v", err)
+	}
+	if !res.Tags {
+		t.Error("Tags = false, want true (pending tag must be pushed)")
+	}
+	got, err := bare.Storer.Reference(tag.Name())
+	if err != nil {
+		t.Fatalf("remote tag still missing after push: %v", err)
+	}
+	if got.Hash() != tag.Hash() {
+		t.Errorf("remote tag = %s, want %s", got.Hash(), tag.Hash())
+	}
+	if err := bare.Storer.HasEncodedObject(tag.Hash()); err != nil {
+		t.Error("remote tag object missing")
+	}
+}
+
 // newRemoteBare creates a bare repo and routes the given protocol to an
 // in-process server that serves that repo's storage, so pushes never touch
 // the network or a git binary.

@@ -230,9 +230,6 @@ func (u *UI) initStyles() {
 	}
 }
 
-// IsTTY reports whether the UI is rendering to an interactive terminal.
-func (u *UI) IsTTY() bool { return u.tty }
-
 // BeginGroup opens a logical log group. On a TTY a colored group header is
 // printed and subsequent structured records are prefixed with a tree
 // connector (├─ / └─) tying them under that header. lineCount is the number
@@ -406,6 +403,12 @@ func (u *UI) renderFields(fields []Field) string {
 // the last line of the group) tying related steps together under the
 // group's header. Outside a group, or off a TTY, the flat form is emitted.
 func (u *UI) emit(w io.Writer, level, step, msg string, fields ...Field) {
+	// The animated countdown / spinner goroutines rewrite the current
+	// stderr line under u.mu; every structured write (here and theirs) goes
+	// through the same mutex so a record printed while a countdown is live
+	// cannot interleave with the rewrites and get garbled or erased.
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	ts := now()
 	fieldStr := u.renderFields(fields)
 	if !u.tty {
@@ -735,11 +738,6 @@ func (u *UI) Info(format string, args ...any) {
 	u.emit(u.Err, "INFO", "", msg)
 }
 
-// Println writes a pre-formatted line to stdout.
-func (u *UI) Println(s string) {
-	fmt.Fprintln(u.Out, s)
-}
-
 // --- Final result rendering ---------------------------------------------------
 
 // CommitResult renders the final "committed" structured record to stdout.
@@ -817,7 +815,7 @@ func (u *UI) Summary(subject, body string) {
 		}
 		return
 	}
-	u.Println(u.renderFrame(subject, body))
+	fmt.Fprintln(u.Out, u.renderFrame(subject, body))
 }
 
 // Startup prints the version banner shown at program start. It goes to
@@ -936,7 +934,6 @@ func (u *UI) SecurityKeyTouchNotice(keyPath, action string) {
 type touchCountdown struct {
 	remaining float64
 	done      chan struct{}
-	over      bool
 	timedOut  bool
 }
 
@@ -1056,10 +1053,7 @@ func (u *UI) TouchStop() {
 	}
 	u.mu.Lock()
 	if u.touch != nil {
-		if !u.touch.over {
-			u.touch.over = true
-			close(u.touch.done)
-		}
+		close(u.touch.done)
 		if u.touch.timedOut {
 			u.touchInfo.timedOut = true
 		}

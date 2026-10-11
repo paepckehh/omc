@@ -539,18 +539,17 @@ func LatestSemverTag(repo *git.Repository) (string, error) {
 	}
 	defer iter.Close()
 
-	var best *semver
 	var bestRaw string
+	var best [3]int
 	err = iter.ForEach(func(ref *plumbing.Reference) error {
 		name := strings.TrimPrefix(ref.Name().String(), "refs/tags/")
 		m := semverRe.FindStringSubmatch(name)
 		if m == nil {
 			return nil
 		}
-		v := parseSemver(m[1], m[2], m[3])
-		if best == nil || semverLess(best, v) {
-			best = v
-			bestRaw = name
+		v := [3]int{mustAtoi(m[1]), mustAtoi(m[2]), mustAtoi(m[3])}
+		if bestRaw == "" || semverLess(best, v) {
+			best, bestRaw = v, name
 		}
 		return nil
 	})
@@ -687,32 +686,20 @@ func storeTagObject(repo *git.Repository, content []byte) (plumbing.Hash, error)
 
 // --- semver helpers ----------------------------------------------------------
 
-type semver struct {
-	major, minor, patch int
-}
-
-func parseSemver(major, minor, patch string) *semver {
-	return &semver{
-		major: mustAtoi(major),
-		minor: mustAtoi(minor),
-		patch: mustAtoi(patch),
-	}
-}
-
 func mustAtoi(s string) int {
 	v, _ := strconv.Atoi(s)
 	return v
 }
 
 // semverLess reports whether a is strictly older than b.
-func semverLess(a, b *semver) bool {
-	if a.major != b.major {
-		return a.major < b.major
+func semverLess(a, b [3]int) bool {
+	if a[0] != b[0] {
+		return a[0] < b[0]
 	}
-	if a.minor != b.minor {
-		return a.minor < b.minor
+	if a[1] != b[1] {
+		return a[1] < b[1]
 	}
-	return a.patch < b.patch
+	return a[2] < b[2]
 }
 
 // --- Push to the remote -------------------------------------------------------
@@ -767,7 +754,10 @@ func defaultRemoteConfig(repo *git.Repository) (*config.RemoteConfig, error) {
 // authentication; when empty, go-git falls back to its default auth (SSH
 // agent). For file:// or https URLs the key is not applicable.
 //
-// NoErrAlreadyUpToDate is treated as success (nothing to push).
+// NoErrAlreadyUpToDate is treated as success (nothing to push). An
+// up-to-date branch does not stop the tag pass: pending local tags (a
+// previous run whose tag push failed) are exactly what the tag pass is
+// there to publish.
 // ErrForceNeeded / non-fast-forward errors from the tag pass are returned
 // as errors; the branch push itself already succeeded at that point.
 func PushToRemote(repo *git.Repository, keyPath string) (PushResult, error) {
@@ -796,16 +786,16 @@ func PushToRemote(repo *git.Repository, keyPath string) (PushResult, error) {
 			config.RefSpec("refs/heads/" + branch + ":refs/heads/" + branch),
 		}
 	}
-	if err := pushOnce(repo, remoteCfg, opts); err != nil {
-		if errors.Is(err, git.NoErrAlreadyUpToDate) {
-			return PushResult{Remote: remoteCfg.Name, Branch: branch, Tags: false}, nil
-		}
+	if err := pushOnce(repo, remoteCfg, opts); err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return PushResult{}, err
 	}
 
 	// Second pass mirrors "git push --tags": update every refs/tags/*
 	// that exists locally. Like git, the tag refspec is forced, so a
-	// remote tag that already points elsewhere is updated.
+	// remote tag that already points elsewhere is updated. It also runs
+	// when the branch was already up-to-date: a prior run may have pushed
+	// the branch but failed the tag pass, leaving pending local tags that
+	// only this pass publishes.
 	if err := pushOnce(repo, remoteCfg, &git.PushOptions{
 		RemoteName: remoteCfg.Name,
 		Auth:       auth,

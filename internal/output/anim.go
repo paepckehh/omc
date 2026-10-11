@@ -135,7 +135,6 @@ func newAnim(opts animSettings) *anim {
 
 // renderLabel prerenders the label runes in the label color.
 func (a *anim) renderLabel(label string) {
-	a.settings.label = label
 	a.labelWidth = lipgloss.Width(label)
 	a.labelRunes = a.labelRunes[:0]
 	for _, r := range label {

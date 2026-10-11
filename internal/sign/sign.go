@@ -197,7 +197,7 @@ func SecurityKeySigner(keyPath string) (*Signer, error) {
 		return nil, fmt.Errorf("ssh-agent does not hold security key %s (add it with: ssh-add %s)", filepath.Base(keyPath), keyPath)
 	}
 
-	return &Signer{signer: &agentSigner{signer: found, conn: conn}, pseudoKeyType: skTypeOf(found)}, nil
+	return &Signer{signer: &agentSigner{signer: found}, pseudoKeyType: skTypeOf(found)}, nil
 }
 
 // skTypeOf returns the sk-* algorithm an agent-backed security-key signer
@@ -218,16 +218,12 @@ func skTypeOf(s ssh.Signer) string {
 }
 
 // agentSigner is an ssh.Signer that forwards Sign calls to an agent-held
-// identity and keeps the agent connection open for the signer's lifetime.
-// The agent-side security-key signer reports its public key with the sk-*
-// type, so signatures (and the recorded algorithm) stay byte-compatible
-// with what "git commit -S" / "git tag -s" produce on a smartcard.
+// identity. The agent connection stays alive through the underlying
+// agent-backed signer (it references the agent client, which references the
+// connection); it is deliberately never closed here, the short-lived CLI
+// exits right after signing and the OS cleans up.
 type agentSigner struct {
 	signer ssh.Signer
-	// conn is retained so the agent client's request pipeline stays
-	// alive; it is deliberately never closed here, the short-lived CLI
-	// exits right after signing and the OS cleans up.
-	conn net.Conn
 }
 
 func (s *agentSigner) PublicKey() ssh.PublicKey { return s.signer.PublicKey() }

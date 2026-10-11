@@ -58,6 +58,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"paepcke.de/omc/internal/config"
 	"paepcke.de/omc/internal/gitops"
@@ -415,12 +416,14 @@ func configReport(cfg config.Config) (detected, verified []output.Field) {
 }
 
 // oneLine collapses a value to a single trimmed line (newlines and runs of
-// whitespace become single spaces) and caps it at 120 chars so an override
+// whitespace become single spaces) and caps it at 120 runes so an override
 // such as a multi-line OMC_MESSAGE cannot break the structured log record.
+// The cut is rune-safe: slicing bytes could split a multi-byte character and
+// leave an invalid-UTF-8 fragment in the log.
 func oneLine(s string) string {
 	s = strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
-	if len(s) > 120 {
-		s = s[:120] + "..."
+	if utf8.RuneCountInString(s) > 120 {
+		s = string([]rune(s)[:120]) + "..."
 	}
 	return s
 }
@@ -513,8 +516,8 @@ func shortenSubject(body string) string {
 	for line := range strings.SplitSeq(body, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
-			if len(line) > 72 {
-				line = line[:72]
+			if utf8.RuneCountInString(line) > 72 {
+				line = string([]rune(line)[:72])
 			}
 			return line
 		}

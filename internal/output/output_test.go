@@ -370,13 +370,6 @@ func TestErrorNonTTY(t *testing.T) {
 	}
 }
 
-func TestIsTTYFalseForBuffer(t *testing.T) {
-	ui, _, _ := newTestUI()
-	if ui.IsTTY() {
-		t.Error("IsTTY() = true for non-file writer, want false")
-	}
-}
-
 func TestTagResultNonTTY(t *testing.T) {
 	t.Run("unsigned", func(t *testing.T) {
 		ui, out, _ := newTestUI()

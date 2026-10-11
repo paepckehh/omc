@@ -643,7 +643,9 @@ repository's default remote — the go-git equivalent of `git push; git push
    forwards the challenge to your smartcard — the same way `git push` with
    `IdentitiesOnly` + a security key works. If the agent is missing or does
    not hold the key, the push is skipped with a warning.
-5. `NoErrAlreadyUpToDate` is treated as success. Any other failure (no
+5. `NoErrAlreadyUpToDate` is treated as success — and an up-to-date branch
+   does **not** stop the tag pass: pending local tags (a previous run whose
+   tag push failed) are still published. Any other failure (no
    remote, non-fast-forward, network) logs a warning and exits 0 — the
    commit and tag are never rolled back over a push problem.
 6. The push also runs when there is nothing to commit or tag (clean

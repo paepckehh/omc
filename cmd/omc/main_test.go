@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"paepcke.de/omc/internal/config"
 	"paepcke.de/omc/internal/gitops"
@@ -30,7 +31,7 @@ func TestOneLine(t *testing.T) {
 	}
 }
 
-// TestOneLineCapsLength verifies the 120-char cap.
+// TestOneLineCapsLength verifies the 120-rune cap.
 func TestOneLineCapsLength(t *testing.T) {
 	in := strings.Repeat("x", 200)
 	got := oneLine(in)
@@ -39,6 +40,34 @@ func TestOneLineCapsLength(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "...") {
 		t.Errorf("oneLine should end with ..., got %q", got)
+	}
+}
+
+// TestOneLineRuneSafe verifies the 120-rune cap cuts on a rune boundary: a
+// value whose byte 120 falls mid-rune must stay valid UTF-8 (the old byte
+// slice split multi-byte characters and left invalid fragments in the log).
+func TestOneLineRuneSafe(t *testing.T) {
+	// "ü" is 2 bytes: 130 of them = 260 bytes but 130 runes, over the cap.
+	got := oneLine(strings.Repeat("ü", 130))
+	if !utf8.ValidString(got) {
+		t.Errorf("oneLine produced invalid UTF-8: %q", got)
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Errorf("oneLine should end with ..., got %q", got)
+	}
+}
+
+// TestShortenSubjectRuneSafe verifies the 72-rune subject cap never splits a
+// multi-byte character (the old byte cut could leave a lone continuation byte
+// at the end of a commit subject).
+func TestShortenSubjectRuneSafe(t *testing.T) {
+	// 1 ASCII byte then 100 two-byte runes: byte 72 lands mid-rune.
+	got := shortenSubject("a" + strings.Repeat("ü", 100))
+	if !utf8.ValidString(got) {
+		t.Errorf("shortenSubject produced invalid UTF-8: %q", got)
+	}
+	if n := utf8.RuneCountInString(got); n > 72 {
+		t.Errorf("shortenSubject = %d runes, want <= 72", n)
 	}
 }
 
