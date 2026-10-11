@@ -47,6 +47,9 @@ developer contract.
   security-key handle without a matching ssh-agent identity degrades the
   same way. If `OMC_PUSH_KEY_PATH` is set but unusable, or the push fails,
   log a warning and leave the commit and tag local (never rolled back).
+  The pre-tag upstream tag pull (`gitops.PullTags`) is best-effort too: a
+  repo without a remote has nothing to pull, and a failed pull only warns —
+  the tag is then bumped from the local tag state.
   Not being in a repo is an error.
 - **Pure Go, single static binary.** Any new dependency must be pure Go.
 
@@ -59,7 +62,8 @@ internal/config/      config.FromEnv() reads the env vars
 internal/gitops/      PlainOpen, StageAll, StagedDiff, Commit, SignedCommit,
                       ResolveIdentity, Scout, index→tree writer,
                       LatestSemverTag, NextSemverTag, CreateTag, SignedTag,
-                      ValidSemverTag, NormalizeTag, PushToRemote
+                      ValidSemverTag, NormalizeTag, PullTags (upstream tag
+                      pull, git fetch --tags), PushToRemote
 internal/sign/        sign.Load, sign.SecurityKeySigner, signer.Sign → armored SSH sig;
                       FIDO2 detection & agent delegation (DetectKind, IsSecurityKeyPath, HandleMatches)
 internal/llm/         shared commit-message prompts + Generator interface (all backends)
@@ -110,6 +114,10 @@ startup is correct as long as the constant and the latest tag agree.
 ## Auto semver tagging
 
 After every successful commit, `omc` tags that commit with a semver tag.
+Before any tag name is generated, the pipeline pulls the upstream tag state
+(`gitops.PullTags`, the go-git equivalent of `git fetch --tags` against the
+default remote, authenticated with the push key on SSH remotes) so the
+bump can never collide with a tag that already exists upstream.
 If `OMC_TAG` is set and parses as strict semver, that name (normalized
 with a leading `v`) is used verbatim; otherwise the auto-bump path scans
 all `refs/tags/v*.*.*` refs and bumps the patch segment. When no prior
@@ -149,7 +157,9 @@ config. Config files are only consulted for the identity fallback.
   accepts the result.
 - Tests use `t.TempDir()` + `os.Chdir(dir)`; they create real git repos
   with `git.PlainInit` and never shell out to git except the e2e binary
-  test (which skips if `git` is unavailable).
+  test (which skips if `git` is unavailable). Push and pull tests run
+  against an in-process git server (go-git `transport/server` +
+  `MapLoader`), so no network and no binaries are involved.
 
 ## Testing
 
@@ -167,5 +177,6 @@ config. Config files are only consulted for the identity fallback.
 6. Behavior honored: repo detection + context diagnostic, stage-all,
    optional signing, optional LLM message generation (Ollama, with an
    OpenAI-compatible endpoint fallback), structured timestamped log
-   output (starting with the version banner), and auto semver tagging of
-   the new commit (signed when a key is configured).
+   output (starting with the version banner), upstream tag pull before
+   bumping, and auto semver tagging of the new commit (signed when a key
+   is configured).

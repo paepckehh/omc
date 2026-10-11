@@ -9,6 +9,7 @@ package llm
 
 import (
 	"context"
+	"strconv"
 	"strings"
 )
 
@@ -91,7 +92,7 @@ func truncateDiff(diff string) string {
 		out = append(out, section[:top]...)
 		out = append(out, "")
 		out = append(out, " ... (diff truncated: section had "+
-			itoa(len(section))+" lines, showing "+itoa(keep)+") ...")
+			strconv.Itoa(len(section))+" lines, showing "+strconv.Itoa(keep)+") ...")
 		out = append(out, "")
 		out = append(out, section[len(section)-bottom:]...)
 	}
@@ -113,28 +114,4 @@ func truncateDiff(diff string) string {
 	}
 
 	return strings.Join(out, "\n")
-}
-
-// itoa is a tiny dependency-free int-to-string converter used by truncateDiff
-// so the package stays free of strconv for this trivial formatting need.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }

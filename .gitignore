@@ -12,3 +12,7 @@
 *.swp
 .idea/
 .vscode/
+
+# other
+.attic
+.crushrc

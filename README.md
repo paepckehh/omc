@@ -2,33 +2,31 @@
 
 # omc
 
-**oh-my-commit — one command, no flags. Signed, AI-described commits your team can actually trust.**
+**oh-my-commit — three letters, zero flags, fully signed autopilot for your git repos.**
 
 `omc` (spoken: *"oh-my-commit"*) is a plain, stupid-simple git auto-commit,
 sign, tag, and push utility written in pure Go. It takes **zero command line
-arguments** and has **zero runtime dependencies** — not even `git` needs to
-be installed. Every behavior is an environment variable. Inside any git
-working tree, one 3-letter command does the equivalent of:
+arguments** and has **zero runtime dependencies** — not even `git` needs to be
+installed. Every behavior is an environment variable. Inside any git working
+tree, one 3-letter command does the equivalent of:
 
-```script
-#!/bin/sh
+```sh
 git add -A
 git commit -S -m <generated detailed commit message>
+git fetch --tags   # collision guard: never bump into an upstream tag
 git tag -s <old_semver+1>
-[opt: git push]
-[opt: git push --tags]
+[opt] git push
+[opt] git push --tags
 ```
 
-It supports agent/human role separation for signed commits, including
-LLM-generated commit messages and final review/push by humans.
-
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![Pure Go](https://img.shields.io/badge/Pure_Go-no_git_binary-7DD3FC?logo=go&logoColor=white)](https://github.com/paepckehh/omc)
+[![Pure Go](https://img.shields.io/badge/Pure_Go-no_git_binary-7DD3FC?logo=go&logoColor=white)](#)
+[![Static Binary](https://img.shields.io/badge/Binary-static-F59E0B?logo=go&logoColor=white)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22C55E?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Static Binary](https://img.shields.io/badge/Binary-static-F59E0B?logo=go&logoColor=white)](https://github.com/paepckehh/omc)
 [![No Telemetry](https://img.shields.io/badge/Telemetry-none-EF4444?logo=privatedirection&logoColor=white)](#-environment-only-design)
+[![Made for agents](https://img.shields.io/badge/Built_for-AI_agents-8B5CF6?logo=anthropic&logoColor=white)](#-secure-agentic-workflows)
 
-[Features](#-features) · [Quick Start](#-quick-start) · [Demo](#-demo) · [Why](#-why-another-commit-tool) · [Agentic Workflows](#-secure-agentic-workflows) · [How it works](#-how-it-works)
+[Features](#-features) · [Quick Start](#-quick-start) · [Demo](#-demo) · [Pipeline](#-how-it-works) · [Why](#-why-another-commit-tool) · [Agentic Workflows](#-secure-agentic-workflows) · [Usage](#-usage)
 
 </div>
 
@@ -47,7 +45,7 @@ Every option is an environment variable, so it composes in scripts, aliases, pre
 <td width="50%" valign="top">
 
 ### 🟢 Native git in Go
-Repository discovery, `git add -A`, unified diffs, commit creation, and annotated tags all run through [go-git]. No external `git` process at runtime — only one static binary. History output is left to your own `git log` invocation.
+Repository discovery, `git add -A`, unified diffs, commits, annotated tags, fetch, and push all run through [go-git]. No external `git` process at runtime — one static binary, `make build` stamps the tag right into it.
 
 </td>
 </tr>
@@ -57,12 +55,12 @@ Repository discovery, `git add -A`, unified diffs, commit creation, and annotate
 ### 🔑 SSH-signed commits
 Point `OMC_SIGN_KEY_PATH` at an SSH private key and the commit carries an armored `BEGIN SSH SIGNATURE` header, byte-compatible with `git commit -S`. `git log --show-signature` and `git verify-commit` confirm it.
 
-**Smartcard (FIDO2) keys** — `id_ed25519_sk` / `id_ecdsa_sk` from `ssh-keygen -t ed25519-sk` — are supported too: point `OMC_SIGN_KEY_PATH` at the key handle and omc signs through your **ssh-agent** (the agent talks to the device, which enforces the touch/PIN). On a TTY an animated `🔑 TOUCH YOUR SECURITY KEY` countdown runs while the signature waits for the device touch, so the urgency is unmistakable. No agent loaded with the key → omc warns and commits unsigned; it never blocks.
+**Smartcard (FIDO2) keys** — `id_ed25519_sk` / `id_ecdsa_sk` from `ssh-keygen -t ed25519-sk` — are supported too: omc signs through your **ssh-agent** (the agent talks to the device, which enforces the touch/PIN). On a TTY an animated `🔑 TOUCH YOUR SECURITY KEY` countdown runs while the signature waits for the device touch. No agent loaded with the key → omc warns and commits unsigned; it never blocks.
 
 </td>
 <td width="50%" valign="top">
 
-### 🤖 AI commit messages
+### 🤖 AI commit messages, local-first
 With `OLLAMA_DESC_URL` set, the staged diff is sent to your **local** model twice: once for a rich explanatory body, once to condense it into a one-line, imperative TL;DR. Your code never leaves your machine. When Ollama is not configured or unreachable, an **OpenAI-compatible** endpoint (`OPENAPI_URL` / `OPENAPI_TOKEN`; `OPENAPI_DESC_*` legacy aliases accepted) is used as a fallback with the same prompts.
 
 </td>
@@ -70,22 +68,8 @@ With `OLLAMA_DESC_URL` set, the staged diff is sent to your **local** model twic
 <tr>
 <td width="50%" valign="top">
 
-### 👤 Flexible identity
-`OMC_NAME`/`OMC_EMAIL` win, then the standard `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables, then the repo's git config, then a built-in default.
-
-</td>
-<td width="50%" valign="top">
-
-### 🛡️ Always does the right, minimal thing
-No repo → clear error. No Ollama → try the OpenAI-compatible fallback → `update`. No key → unsigned. It never leaves a task half-done over infrastructure.
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### 🏷️ Auto semver tagging
-Every successful commit is immediately tagged with the next patch version (`vX.Y.N+1`). The latest `v*.*.*` tag is discovered, the patch is bumped, and an annotated tag is created on the new commit — SSH-signed when a key is configured, just like the commit itself. Set `OMC_TAG` to name the tag yourself.
+### 🏷️ Auto semver tagging — collision-proof
+Every successful commit is immediately tagged with the next patch version (`vX.Y.N+1`). Before a name is generated, omc **pulls the upstream tag state** (the go-git equivalent of `git fetch --tags`): tags pushed from another machine in the meantime become visible locally, so the bump can never collide with — or force-push over — an upstream tag. The tag is annotated and SSH-signed with the same key as the commit. Set `OMC_TAG` to name the tag yourself.
 
 </td>
 <td width="50%" valign="top">
@@ -98,20 +82,36 @@ Set `OMC_SUBJECT` / `OMC_MESSAGE` to bypass the LLM and write the commit text yo
 <tr>
 <td width="50%" valign="top">
 
-### 🔁 Idempotent & predictable
-No flags to remember, no prompts to answer. No Tags that collide. Just configure (when needed env) then 3 letter Autopilot everywhere.
+### 👤 Flexible identity
+`OMC_NAME`/`OMC_EMAIL` win, then the standard `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables, then the repo's git config, then a built-in default.
 
 </td>
 <td width="50%" valign="top">
 
-### 🚀 Optional push
-Set `OMC_PUSH_KEY_PATH` to an SSH key and `omc` pushes the new commit and its tag to the default remote after tagging — `git push; git push --tags`, all in-process via go-git. Failures degrade: the commit and tag stay local, never rolled back. When the working tree is clean, the push still runs so tags left behind by a previously failed push get published.
+### 🛡️ Always degrades, never blocks
+No repo → clear error. No Ollama → try the OpenAI-compatible fallback → `update`. No key → unsigned. No network for the tag pull → warn and bump from local state. Failed push → commit and tag stay local, never rolled back. It never leaves a task half-done over infrastructure.
 
-Like signing, the push key accepts a **FIDO2 security-key handle** (`~/.ssh/id_ed25519_sk`): omc authenticates via the ssh-agent and your smartcard, showing the same animated touch countdown during the SSH handshake. Without an agent the push degrades to a warning.
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 🚀 Optional push
+Set `OMC_PUSH_KEY_PATH` to an SSH key and `omc` pushes the new commit and its tag to the default remote after tagging — `git push; git push --tags`, all in-process via go-git. When the working tree is clean, the push still runs so tags left behind by a previously failed push get published. The push key also accepts a **FIDO2 security-key handle**: auth goes through the ssh-agent and your smartcard, with the same animated touch countdown.
+
+</td>
+<td width="50%" valign="top">
+
+### 🔁 Idempotent & predictable
+No flags to remember, no prompts to answer, no tags that collide. Configure once (env-only), then 3-letter autopilot everywhere.
 
 </td>
 </tr>
 </table>
+
+> [!TIP]
+> Alias it once and forget it exists: `alias commit='omc'`. From now on every
+> save in any repo is a signed, described, semver-tagged commit.
 
 ---
 
@@ -132,7 +132,7 @@ go install paepcke.de/omc/cmd/omc@latest
 Or build from source:
 
 ```console
-git clone https://github.com/paepckehh/omc
+git clone <this repo>
 cd omc
 make build
 sudo install -m0755 omc /usr/local/bin/
@@ -155,11 +155,11 @@ OMC_TAG="v1.4.0" \
 omc
 ```
 
-### Requirements
-
-- Go 1.26+ to build (the binary itself is a single static executable).
-- **Optional**: a running [Ollama] server for AI-generated commit messages.
-- **Optional**: an SSH private key to sign commits.
+> [!NOTE]
+> Optional extras: a running [Ollama] server for AI-generated commit
+> messages, an SSH private key to sign commits, and an SSH key for pushing.
+> Without any of them omc still works — it just commits unsigned, with the
+> `update` subject, and skips the push.
 
 ---
 
@@ -188,7 +188,7 @@ the final commit and tag results go to stdout.
 $ export OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519
 $ echo 'func main() { fmt.Println("hi") }' >> main.go
 $ omc
-14:18:31 ℹ️ INFO omc omc v0.1.38
+14:18:31 ℹ️ INFO omc omc v0.1.43
 14:18:31 ℹ️ INFO omc config detected environment count=1 OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519
 14:18:31 ℹ️ INFO omc config verified config count=1 sign_key=valid=true
 14:18:31   📂 preparing repository
@@ -304,7 +304,7 @@ back to the same structured, greppable line format:
 
 ```console
 $ omc 2>&1 | cat
-12:04:07 ℹ️ INFO omc omc v0.1.38
+12:04:07 ℹ️ INFO omc omc v0.1.43
 12:04:07 ℹ️ INFO omc config detected environment count=2 OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519 OLLAMA_DESC_URL=http://127.0.0.1:11434
 12:04:07 ℹ️ INFO omc config verified config count=2 sign_key=valid=true ollama=configured=true
 12:04:07 ℹ️ INFO omc 📂 open detecting repository
@@ -428,6 +428,7 @@ git push
 Nothing has left your machine until step 3. The agent can't sneak work past you;
 every change is gated on a human verifying the signature *and* the diff.
 
+> [!IMPORTANT]
 > **Opt-in automation:** if you *do* want the agent to publish, hand it a
 > dedicated, low-privilege push key via `OMC_PUSH_KEY_PATH`. The push still
 > happens only after the commit and tag are created, and a failed push never
@@ -478,14 +479,15 @@ omc
 | `OMC_SUBJECT` | Override the commit subject. When set, **no LLM generation runs**. See [Message & tag overrides](#-message--tag-overrides). |
 | `OMC_MESSAGE` | Override the commit body. When set, **no LLM generation runs**. See [Message & tag overrides](#-message--tag-overrides). |
 | `OMC_TAG` | Override the tag name. Used only when it is strict semver `vMAJOR.MINOR.PATCH`; otherwise the auto-bump runs. See [Message & tag overrides](#-message--tag-overrides). |
-| `OMC_PUSH_KEY_PATH` | Path to an SSH **private** key. When set and readable, pushes the new commit and tags to the default remote after tagging (`git push; git push --tags`). A **FIDO2 security-key handle** is supported (auth via ssh-agent + smartcard). If set but unusable, or the push fails, warns and leaves the commit/tag local. |
+| `OMC_PUSH_KEY_PATH` | Path to an SSH **private** key. When set and readable, pushes the new commit and tags to the default remote after tagging (`git push; git push --tags`). Also used to authenticate the pre-tag **upstream tag pull**. A **FIDO2 security-key handle** is supported (auth via ssh-agent + smartcard). If set but unusable, or the push fails, warns and leaves the commit/tag local. |
 
+> [!WARNING]
 > **Signing:** only passphrase-less software keys are supported (there is no
 > interactive prompt, by design). `ssh-keygen -t ed25519 -N "" -C agent@paepcke.de -f ~/.ssh/agent`
-> is your friend. Scheduling note for CI: protect that key with filesystem
-> permissions and rotate it like any credential. For **smartcard keys** you
-> need your ssh-agent running and the key loaded (`ssh-add ~/.ssh/id_ed25519_sk`);
-> the device then enforces the touch/PIN prompt itself.
+> is your friend. Protect that key with filesystem permissions and rotate it
+> like any credential. For **smartcard keys** you need your ssh-agent running
+> and the key loaded (`ssh-add ~/.ssh/id_ed25519_sk`); the device then enforces
+> the touch/PIN prompt itself.
 
 <details>
 <summary><b>🤖 AI message flow — how the commit body is generated</b></summary>
@@ -572,26 +574,37 @@ large values in any segment are accepted, so jumps like `v999.0.0` are fine.
 </details>
 
 <details>
-<summary><b>🏷️ Auto semver tagging — how the tag is created</b></summary>
+<summary><b>🏷️ Auto semver tagging — upstream-pulled, collision-proof</b></summary>
 
 Immediately after a successful commit, `omc` tags that commit with a semver tag:
 
-1. If `OMC_TAG` is set and parses as strict semver `vMAJOR.MINOR.PATCH`,
+1. **Pull the upstream tag state first** — the go-git equivalent of
+   `git fetch --tags` against the default remote, before any name is
+   generated. This is the collision guard: a tag that another machine pushed
+   in the meantime lands in the local refs *before* the bump, so the
+   generated name can never collide with an upstream tag (and the later
+   forced tag push can never overwrite one). Local tags the remote does not
+   have are never pruned; a local tag that diverged from a same-named remote
+   tag follows the remote. The pull is best-effort: a repository without a
+   remote has nothing to pull, and a failed pull only warns and bumps from
+   the local tag state.
+2. If `OMC_TAG` is set and parses as strict semver `vMAJOR.MINOR.PATCH`,
    that name (with a leading `v` added for bare versions) is used verbatim.
    Otherwise the auto-bump path runs.
-2. All existing `refs/tags/v*.*.*` refs are scanned; the highest semver version
+3. All existing `refs/tags/v*.*.*` refs are scanned; the highest semver version
    is selected (pre-release suffixes like `-rc.1` are ignored for comparison).
-3. The patch segment is bumped by one (`v1.2.3` → `v1.2.4`). When no semver
+4. The patch segment is bumped by one (`v1.2.3` → `v1.2.4`). When no semver
    tag exists yet, the first tag is `v0.0.1`.
-4. An **annotated** tag object is created on the new commit. The tag message is
+5. An **annotated** tag object is created on the new commit. The tag message is
    the commit's subject line.
-5. When `OMC_SIGN_KEY_PATH` is set and the key is valid, the tag is **SSH-signed**
+6. When `OMC_SIGN_KEY_PATH` is set and the key is valid, the tag is **SSH-signed**
    with the same key used for the commit — the armored `BEGIN SSH SIGNATURE`
    block is embedded in the tag object, byte-compatible with `git tag -s`.
    When no key is configured, an unsigned annotated tag is created instead.
 
 The tag step always runs after a commit. If the tag step fails (e.g. a tag of
-that name already exists), `omc` logs a warning and exits 0 — the commit
+that name already exists — possible when the upstream pull could not run and
+the local state was behind), `omc` logs a warning and exits 0 — the commit
 itself is not affected.
 
 ```console
@@ -686,22 +699,32 @@ the identity fallback; nothing else depends on them.
 
 ## ⚙️ How it works
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│ omc (pure Go, no git binary, no CLI args)                    │
-│                                                              │
-│  1. find enclosing repo  (go-git PlainOpen, walk up)         │
-│  1b. report repo context (dir, remotes, latest tag)          │
-│  2. stage all            (Worktree.AddWithOptions All)       │
-│  3. build staged diff    (HEAD tree → index tree)            │
-│  4. optional: LLM two-pass message generation             │
-│     (Ollama, fallback to OpenAI-compatible endpoint)     │
-│  5. optional: SSH sign   (hiddeco/sshsig, "git" ns, sha512)  │
-│  5b. optional: smartcard touch countdown (FIDO2 sk keys)    │
-│  6. create commit        (object.Commit, advance HEAD)       │
-│  7. auto-tag             (latest v*.*.* → patch+1, signed)   │
-│  8. optional push         (OMC_PUSH_KEY_PATH → git push --tags)│
-└──────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["omc — no args, env only"] --> B{"inside a repo?"}
+    B -- "no" --> X["FAIL: exit 1"]
+    B -- "yes" --> C["📂 stage all (git add -A)"]
+    C --> D["🔍 staged diff\n(HEAD tree → index tree)"]
+    D --> E{"nothing changed?"}
+    E -- "yes" --> PP["clean tree → optional push\nof pending tags → exit 0"]
+    E -- "no" --> F{"OMC_SUBJECT /\nOMC_MESSAGE set?"}
+    F -- "yes" --> G["use overrides verbatim"]
+    F -- "no" --> H["💬 LLM: Ollama first,\nOpenAI-compatible fallback,\nthen 'update'"]
+    G --> I{"OMC_SIGN_KEY_PATH?"}
+    H --> I
+    I -- "software key" --> J["✍️ sign in pure Go"]
+    I -- "FIDO2 sk-key" --> K["🔑 ssh-agent + smartcard touch"]
+    I -- "none / broken" --> L["warn → unsigned"]
+    J --> M["📝 commit (git-byte-compatible)"]
+    K --> M
+    L --> M
+    M --> N["🏷️ pull upstream tags\n(git fetch --tags, best-effort)"]
+    N --> O["bump semver patch\n(OMC_TAG override wins)"]
+    O --> P["annotated + SSH-signed tag"]
+    P --> Q{"OMC_PUSH_KEY_PATH?"}
+    Q -- "set" --> R["🚀 push branch + tags\n(never rolls back on failure)"]
+    Q -- "unset / fails" --> Z["✅ exit 0 — commit & tag stay local"]
+    R --> Z
 ```
 
 The commit object is written exactly as git writes it: tree, parents,
@@ -722,12 +745,12 @@ internal/config/       config.FromEnv() reads the env vars
 internal/gitops/       PlainOpen, StageAll, StagedDiff, Commit,
                        SignedCommit, ResolveIdentity, Scout,
                        index→tree writer, semver tag discovery,
-                       CreateTag, SignedTag, PushToRemote
+                       CreateTag, SignedTag, PullTags, PushToRemote
 internal/sign/         sign.Load, sign.SecurityKeySigner,
                        signer.Sign → armored SSH sig; FIDO2 detection
 internal/ollama/       Client.Available, DescribeDetail, SummarizeTLDR
 internal/openai/       OpenAI-compatible fallback (same Generator contract)
-internal/llm/         shared prompts + Generator interface for all backends
+internal/llm/          shared prompts + Generator interface for all backends
 internal/output/       UI: stdout = structured results, stderr = diagnostics;
                        animated scramble spinner, touch countdown, log groups
 ```
@@ -745,9 +768,14 @@ places a human isn't watching:
 - **Hookable** — drop it in a `pre-commit` hook or a global `alias commit=omc`.
 - **Composable** — nothing to remember, nothing to prompt for, plugs straight into
   the non-interactive `$PROMPT_COMMAND` / agent shells where flags are a liability.
-- **Air-gapped by default** — the only network call is to your own Ollama (or
-  an OpenAI-compatible endpoint you configure), so the tool ships no telemetry
-  and phones no home.
+- **Air-gapped by default** — the only network calls go to remotes you configure
+  (your Ollama, your OpenAI-compatible endpoint, your git remote), so the tool
+  ships no telemetry and phones no home.
+
+> [!NOTE]
+> Every line omc prints is a structured, timestamped log record
+> (`<HH:MM:SS> <LEVEL> omc [<step>] <message> [key=value ...]`), even off a
+> TTY — so CI logs, aggregators, and plain `grep` all work on the same output.
 
 ---
 
@@ -755,18 +783,24 @@ places a human isn't watching:
 
 ```console
 make test        # go test ./...
-make build       # go build -o omc ./cmd/omc
+make build       # go build -o omc ./cmd/omc (stamps the git tag into the binary)
 make vet         # go vet ./...
 ```
+
+Contributions are welcome — small, lazy, well-tested PRs preferred. Run the full
+`make test && make vet` gate before pushing; the repo auto-tags every commit,
+so keep changes release-ready.
 
 <details>
 <summary><b>🧪 Testing notes</b></summary>
 
-- `go test ./...` — full suite (config, sign, ollama, gitops, binary e2e).
+- `go test ./...` — full suite (config, sign, ollama, openai, gitops, output, binary e2e).
 - `-short` skips the binary e2e test that compiles the CLI.
 - Tests use `t.TempDir()` + `os.Chdir(dir)`; they create real git repos with
   `git.PlainInit` and never shell out to git except the e2e binary test (which
   skips if `git` is unavailable).
+- Push/pull tests run against an in-process git server (go-git `server.MapLoader`),
+  so no network and no binaries are involved.
 - `writeIndexTree` builds tree objects from the index; it must produce trees
   byte-identical to git so that `git log --show-signature` and `git
   verify-commit` accept signed commits.

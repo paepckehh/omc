@@ -40,10 +40,7 @@ const StatePending = "⏳"
 // get the empty string so callers can render "icon step" only when an
 // icon exists.
 func ActionEmoji(step string) string {
-	if e, ok := actionIcons[step]; ok {
-		return e
-	}
-	return ""
+	return actionIcons[step]
 }
 
 // actionIcons maps each pipeline step to a cool action glyph.

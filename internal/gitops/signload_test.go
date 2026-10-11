@@ -47,7 +47,7 @@ func TestSignedCommitViaSignLoad(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	h, err := SignedCommit(repo, wt, CommitMessage{Subject: "s"}, signer.Sign)
+	h, err := SignedCommit(repo, CommitMessage{Subject: "s"}, signer.Sign)
 	if err != nil {
 		t.Fatal(err)
 	}

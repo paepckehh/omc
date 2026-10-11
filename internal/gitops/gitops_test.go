@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/hiddeco/sshsig"
 	"golang.org/x/crypto/ssh"
 
@@ -55,7 +57,7 @@ func TestCommitCreateWithParent(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	root, err := Commit(repo, wt, CommitMessage{Subject: "initial"})
+	root, err := Commit(repo, CommitMessage{Subject: "initial"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +70,7 @@ func TestCommitCreateWithParent(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	second, err := Commit(repo, wt, CommitMessage{Subject: "second", Body: "details"})
+	second, err := Commit(repo, CommitMessage{Subject: "second", Body: "details"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +97,7 @@ func TestCommitRootNoParent(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	h, err := Commit(repo, wt, CommitMessage{Subject: "first"})
+	h, err := Commit(repo, CommitMessage{Subject: "first"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +144,7 @@ func TestStagedDiff(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Commit(repo, wt, CommitMessage{Subject: "initial"}); err != nil {
+	if _, err := Commit(repo, CommitMessage{Subject: "initial"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -150,7 +152,7 @@ func TestStagedDiff(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	diff, files, err := StagedDiff(repo, wt)
+	diff, files, err := StagedDiff(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +257,7 @@ func TestSignedCommitRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h, err := SignedCommit(repo, wt, CommitMessage{Subject: "signed"}, func(payload []byte) ([]byte, error) {
+	h, err := SignedCommit(repo, CommitMessage{Subject: "signed"}, func(payload []byte) ([]byte, error) {
 		sig, err := sshsig.Sign(strings.NewReader(string(payload)), sshPriv, sign.HashAlgorithm, sign.Namespace)
 		if err != nil {
 			return nil, err
@@ -396,7 +398,7 @@ func TestLatestSemverTagFindsHighest(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	h, err := Commit(repo, wt, CommitMessage{Subject: "init"})
+	h, err := Commit(repo, CommitMessage{Subject: "init"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +423,7 @@ func TestCreateTagAnnotated(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	h, err := Commit(repo, wt, CommitMessage{Subject: "init"})
+	h, err := Commit(repo, CommitMessage{Subject: "init"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +463,7 @@ func TestCreateTagDuplicateFails(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	h, err := Commit(repo, wt, CommitMessage{Subject: "init"})
+	h, err := Commit(repo, CommitMessage{Subject: "init"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +482,7 @@ func TestSignedTagRoundTrip(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	h, err := Commit(repo, wt, CommitMessage{Subject: "init"})
+	h, err := Commit(repo, CommitMessage{Subject: "init"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,5 +547,177 @@ func TestSignedTagRoundTrip(t *testing.T) {
 		sshPriv.PublicKey(), sign.HashAlgorithm, sign.Namespace,
 	); err != nil {
 		t.Fatalf("verify tag signature: %v", err)
+	}
+}
+
+// TestCommitMessageString covers the canonical commit message rendering:
+// subject and body are joined with a blank line, and either part alone
+// collapses to itself.
+func TestCommitMessageString(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  CommitMessage
+		want string
+	}{
+		{"empty", CommitMessage{}, ""},
+		{"subject only", CommitMessage{Subject: "fix bug"}, "fix bug"},
+		{"body only", CommitMessage{Body: "details"}, "details"},
+		{"both", CommitMessage{Subject: "fix bug", Body: "details"}, "fix bug\n\ndetails"},
+		{"trims whitespace", CommitMessage{Subject: "  s  ", Body: " b "}, "s\n\nb"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.msg.String(); got != tc.want {
+				t.Errorf("String() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCommitSubjectFallback verifies the "update" fallback for empty
+// messages.
+func TestCommitSubjectFallback(t *testing.T) {
+	if got := (CommitMessage{}).commitSubject(); got != "update" {
+		t.Errorf("commitSubject() = %q, want update", got)
+	}
+	if got := (CommitMessage{Subject: "real"}).commitSubject(); got != "real" {
+		t.Errorf("commitSubject() = %q, want real", got)
+	}
+}
+
+// TestScout verifies the repository context diagnostic: worktree root, the
+// configured remotes with URLs, and the highest semver tag.
+func TestScout(t *testing.T) {
+	repo, wt, dir := initTestRepo(t)
+	commitFile(t, dir, "a.txt", "a")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := Commit(repo, CommitMessage{Subject: "seed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateTag(repo, h, "v0.1.0", "seed",
+		Identity{Name: "T", Email: "t@e"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateRemote(&config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{"https://example.com/repo.git"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rc := Scout(repo, wt)
+	if rc.Dir != dir {
+		t.Errorf("Dir = %q, want %q", rc.Dir, dir)
+	}
+	if rc.LatestTag != "v0.1.0" {
+		t.Errorf("LatestTag = %q, want v0.1.0", rc.LatestTag)
+	}
+	urls, ok := rc.Remotes["origin"]
+	if !ok || len(urls) != 1 || urls[0] != "https://example.com/repo.git" {
+		t.Errorf("Remotes[origin] = %v, want the configured URL", rc.Remotes)
+	}
+}
+
+// TestScoutEmptyRepo verifies Scout tolerates a fresh repo without tags or
+// remotes without failing.
+func TestScoutEmptyRepo(t *testing.T) {
+	repo, wt, _ := initTestRepo(t)
+	rc := Scout(repo, wt)
+	if rc.LatestTag != "" {
+		t.Errorf("LatestTag = %q, want empty", rc.LatestTag)
+	}
+	if len(rc.Remotes) != 0 {
+		t.Errorf("Remotes = %v, want empty", rc.Remotes)
+	}
+}
+
+// TestSSHHostWithPort verifies the known_hosts lookup key: the default SSH
+// port is filled in when the URL carries none.
+func TestSSHHostWithPort(t *testing.T) {
+	cases := []struct {
+		url  string
+		want string
+	}{
+		{"ssh://git@github.com:2222/org/repo.git", "github.com:2222"},
+		{"ssh://git@github.com/org/repo.git", "github.com:22"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.url, func(t *testing.T) {
+			ep, err := transport.NewEndpoint(tc.url)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := sshHostWithPort(ep); got != tc.want {
+				t.Errorf("sshHostWithPort = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGetSSHAuthEmptyURLs guards the empty remote-URL panic: no URLs means
+// no explicit auth, not a crash.
+func TestGetSSHAuthEmptyURLs(t *testing.T) {
+	auth, err := getSSHAuth("", nil)
+	if err != nil {
+		t.Fatalf("getSSHAuth with no URLs: %v", err)
+	}
+	if auth != nil {
+		t.Errorf("auth = %v, want nil", auth)
+	}
+}
+
+// TestPushToRemoteURLessRemote verifies a remote configured without URLs
+// degrades to a clear error instead of panicking. CreateRemote and SetConfig
+// both reject empty URLs, so the URL-less remote is injected by writing the
+// raw .git/config, which is how a hand-edited repo reaches this state.
+func TestPushToRemoteURLessRemote(t *testing.T) {
+	_, _, dir := initTestRepo(t)
+	cfgPath := filepath.Join(dir, ".git", "config")
+	if err := os.WriteFile(cfgPath, []byte("[core]\n\trepositoryformatversion = 0\n\n[remote \"origin\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Re-open so the on-disk config is read fresh.
+	repo, err := git.PlainOpen(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PushToRemote(repo, ""); err == nil {
+		t.Fatal("expected error for remote without URLs")
+	}
+}
+
+// TestPushToRemoteDeterministicFallback verifies the fallback remote pick
+// is deterministic: with no "origin", the lexicographically first remote
+// with URLs is used regardless of map iteration order.
+func TestPushToRemoteDeterministicFallback(t *testing.T) {
+	bare := newRemoteBare(t, "omcf")
+	_ = bare
+
+	repo, wt, dir := initTestRepo(t)
+	for _, name := range []string{"zeta", "alpha"} {
+		if _, err := repo.CreateRemote(&config.RemoteConfig{
+			Name: name,
+			URLs: []string{"omcf://omc/repos/remote.git"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commitFile(t, dir, "a.txt", "a")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(repo, CommitMessage{Subject: "seed"}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := PushToRemote(repo, "")
+	if err != nil {
+		t.Fatalf("PushToRemote: %v", err)
+	}
+	if res.Remote != "alpha" {
+		t.Errorf("Remote = %q, want alpha (deterministic pick)", res.Remote)
 	}
 }

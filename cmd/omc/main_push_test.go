@@ -45,7 +45,7 @@ func TestPushNothingPushesTags(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	h, err := gitops.Commit(repo, wt, gitops.CommitMessage{Subject: "update", Body: "seed"})
+	h, err := gitops.Commit(repo, gitops.CommitMessage{Subject: "update", Body: "seed"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -123,7 +123,7 @@ func run() int {
 		files    []string
 	)
 	if err := ui.Step("diff", "reading staged diff", func() error {
-		d, f, err := gitops.StagedDiff(repo, wt)
+		d, f, err := gitops.StagedDiff(repo)
 		if err != nil {
 			return err
 		}
@@ -228,7 +228,7 @@ func run() int {
 		commitLines = 3 // unsigned notice + step OK + commit result
 	}
 	tagLines := 2 // step OK + tag result (an OMC_TAG warning shifts these)
-	if skMode && signer != nil {
+	if skCommit {
 		tagLines += 2 // touch notice + touch confirmed
 	}
 	pushLines := 0
@@ -247,7 +247,7 @@ func run() int {
 	ui.BeginGroup("📝 commit", commitLines)
 	if skCommit {
 		commitStep = func(step, msg string, fn func() error) error {
-			return ui.StepTouchCommit(cfg.KeyPath, "the commit signing", signer.PublicAlgorithm(), step, msg, fn)
+			return ui.StepTouch(cfg.KeyPath, "the commit signing", signer.PublicAlgorithm(), step, msg, fn)
 		}
 	} else if cfg.KeyPath == "" {
 		// No key configured at all: announce the unsigned path here (the
@@ -255,7 +255,7 @@ func run() int {
 		// signer group's warnings above).
 		ui.SigningNotice("", false)
 	}
-	hash, commitErr := commitRoutine(commitStep, repo, wt, msg, signer, commitLabel(id, signer != nil))
+	hash, commitErr := commitRoutine(commitStep, repo, msg, signer, commitLabel(id, signer != nil))
 	if commitErr != nil {
 		ui.EndGroup()
 		ui.EndGroup()
@@ -273,16 +273,24 @@ func run() int {
 	}
 
 	var tagName string
-	if skMode && signer != nil {
+	if skCommit {
 		tagStep = func(step, msg string, fn func() error) error {
-			return ui.StepTouchTag(cfg.KeyPath, "the tag signing", signer.PublicAlgorithm(), step, msg, fn)
+			return ui.StepTouch(cfg.KeyPath, "the tag signing", signer.PublicAlgorithm(), step, msg, fn)
 		}
 	}
 	ui.BeginGroup("🏷️ tag", tagLines)
-	if skMode && signer != nil {
+	if skCommit {
 		ui.SecurityKeyTouchNotice(cfg.KeyPath, "the tag signing")
 	}
 	tagErr := tagStep("tag", tagStepLabel(cfg), func() error {
+		// Pull the upstream tag state first ("git fetch --tags") so the
+		// generated name cannot collide with a tag that already exists on
+		// the remote: a bump that happens to match an upstream tag would
+		// otherwise be force-pushed over it. Best-effort: a failed pull
+		// warns and the tag state stays local.
+		if err := gitops.PullTags(repo, cfg.PushKeyPath); err != nil {
+			ui.Warn("pull upstream tags failed (%v); local tag state may be behind the remote", err)
+		}
 		name, skipped, terr := resolveTagName(repo, cfg)
 		if skipped {
 			ui.Warn("OMC_TAG %q is not strict semver (vMAJOR.MINOR.PATCH); falling back to auto-bump", cfg.Tag)
@@ -324,7 +332,7 @@ func run() int {
 			}
 			ui.SecurityKeyTouchNotice(cfg.PushKeyPath, "the push")
 			pushStep = func(step, msg string, fn func() error) error {
-				return ui.StepTouchPush(cfg.PushKeyPath, "the push", pushAlgo, step, msg, fn)
+				return ui.StepTouch(cfg.PushKeyPath, "the push", pushAlgo, step, msg, fn)
 			}
 		}
 		if err := pushStep("push", "pushing commit and tags to remote", func() error {
@@ -342,17 +350,17 @@ func run() int {
 
 // commitRoutine runs the commit step + the structured result for the
 // resolved message and signer.
-func commitRoutine(stepFn func(step, msg string, fn func() error) error, repo *git.Repository, wt *git.Worktree, msg gitops.CommitMessage, signer *sign.Signer, lbl string) (plumbing.Hash, error) {
+func commitRoutine(stepFn func(step, msg string, fn func() error) error, repo *git.Repository, msg gitops.CommitMessage, signer *sign.Signer, lbl string) (plumbing.Hash, error) {
 	var hash plumbing.Hash
 	err := stepFn("commit", lbl, func() error {
 		if signer != nil {
-			h, err := gitops.SignedCommit(repo, wt, msg, func(payload []byte) ([]byte, error) {
+			h, err := gitops.SignedCommit(repo, msg, func(payload []byte) ([]byte, error) {
 				return signer.Sign(payload)
 			})
 			hash = h
 			return err
 		}
-		h, err := gitops.Commit(repo, wt, msg)
+		h, err := gitops.Commit(repo, msg)
 		hash = h
 		return err
 	})
@@ -429,7 +437,7 @@ func pushNothing(ui *output.UI, repo *git.Repository, cfg config.Config) {
 	pushStep := ui.Step
 	if sign.IsSecurityKeyPath(cfg.PushKeyPath) {
 		pushStep = func(step, msg string, fn func() error) error {
-			return ui.StepTouchPush(cfg.PushKeyPath, "the push", "", step, msg, fn)
+			return ui.StepTouch(cfg.PushKeyPath, "the push", "", step, msg, fn)
 		}
 	}
 	var res gitops.PushResult
@@ -445,11 +453,6 @@ func pushNothing(ui *output.UI, repo *git.Repository, cfg config.Config) {
 	ui.PushResult(res.Remote, res.Branch, res.Tags)
 }
 
-// resolveTagName decides the tag name for the new commit. When OMC_TAG
-// is set and parses as strict semver it is normalized (a leading "v" is added
-// for bare "0.1.2") and used verbatim; otherwise the normal patch-bump path
-// runs. An invalid override is logged as a warning so the user knows the
-// override was ignored rather than silently dropped.
 // resolveTagName decides the tag name for the new commit. When OMC_TAG
 // is set and parses as strict semver it is normalized (a leading "v" is added
 // for bare "0.1.2") and used verbatim; otherwise the normal patch-bump path
@@ -586,15 +589,7 @@ func generateMessageProgress(ui *output.UI, ctx context.Context, gen llm.Generat
 
 	stat := "(no file changes)"
 	if len(files) > 0 {
-		var b strings.Builder
-		for i, f := range files {
-			if i > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString("  - ")
-			b.WriteString(f)
-		}
-		stat = b.String()
+		stat = "  - " + strings.Join(files, "\n  - ")
 	}
 
 	detail, err := gen.DescribeDetail(ctx, diff, stat)
@@ -632,11 +627,12 @@ func generateMessageProgress(ui *output.UI, ctx context.Context, gen llm.Generat
 // the smartcard (security-key) backend, so the caller can render the
 // correct notice.
 func loadSigner(ui *output.UI, cfg config.Config) (*sign.Signer, bool) {
-	// A FIDO2 security-key handle (id_ed25519_sk) is not a private key at
-	// all: the file only references a smartcard-held key, and pure Go
-	// cannot parse it. Detect that up front (DetectKind also checks the
-	// adjacent .pub file) and route straight to the ssh-agent.
-	if sign.DetectKind(cfg.KeyPath) == sign.KindSecurityKey {
+	// Route to the ssh-agent whenever the key is (or turns out to be) a
+	// FIDO2 security-key handle (id_ed25519_sk): the file is not a private
+	// key at all, it only references a smartcard-held key, and pure Go
+	// cannot sign with it. Both the up-front kind detection and the
+	// ErrSecurityKeyOnly fallback from Load land here.
+	agentSigner := func() (*sign.Signer, bool) {
 		if s, err := sign.SecurityKeySigner(cfg.KeyPath); err == nil {
 			ui.Warn("ssh key %s is a smartcard security key; signing via the ssh-agent", cfg.KeyPath)
 			return s, true
@@ -644,6 +640,9 @@ func loadSigner(ui *output.UI, cfg config.Config) (*sign.Signer, bool) {
 			ui.Warn("ssh key %s is a smartcard security key, but no ssh-agent identity matches (%v); committing unsigned", cfg.KeyPath, err)
 			return nil, true
 		}
+	}
+	if sign.DetectKind(cfg.KeyPath) == sign.KindSecurityKey {
+		return agentSigner()
 	}
 
 	var signer *sign.Signer
@@ -658,13 +657,7 @@ func loadSigner(ui *output.UI, cfg config.Config) (*sign.Signer, bool) {
 	}
 
 	if errors.Is(stepErr, sign.ErrSecurityKeyOnly) {
-		if s, err := sign.SecurityKeySigner(cfg.KeyPath); err == nil {
-			ui.Warn("ssh key %s is a smartcard security key; signing via the ssh-agent", cfg.KeyPath)
-			return s, true
-		} else {
-			ui.Warn("ssh key %s is a smartcard security key, but no ssh-agent identity matches (%v); committing unsigned", cfg.KeyPath, err)
-			return nil, true
-		}
+		return agentSigner()
 	}
 
 	ui.Warn("ssh key %s unusable (%v); committing unsigned", cfg.KeyPath, stepErr)

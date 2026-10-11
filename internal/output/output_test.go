@@ -262,11 +262,11 @@ func TestSecurityKeyTouchNoticeNonTTY(t *testing.T) {
 	}
 }
 
-func TestStepTouchCommitNonTTY(t *testing.T) {
+func TestStepTouchNonTTY(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		ui, _, err := newTestUI()
-		if eerr := ui.StepTouchCommit("/k/id_ed25519_sk", "the commit signing", "sk-ssh-ed25519@openssh.com", "commit", "committing as Test <t@e> (signed)", func() error { return nil }); eerr != nil {
-			t.Fatalf("StepTouchCommit returned error: %v", eerr)
+		if eerr := ui.StepTouch("/k/id_ed25519_sk", "the commit signing", "sk-ssh-ed25519@openssh.com", "commit", "committing as Test <t@e> (signed)", func() error { return nil }); eerr != nil {
+			t.Fatalf("StepTouch returned error: %v", eerr)
 		}
 		got := err.String()
 		if !strings.Contains(got, "INFO") || !strings.Contains(got, "commit") {
@@ -296,8 +296,8 @@ func TestStepTouchCommitNonTTY(t *testing.T) {
 	t.Run("failure", func(t *testing.T) {
 		ui, _, err := newTestUI()
 		want := errors.New("agent unreachable")
-		if eerr := ui.StepTouchCommit("/k/id_ed25519_sk", "the commit signing", "sk-ssh-ed25519@openssh.com", "commit", "committing", func() error { return want }); eerr == nil {
-			t.Fatal("StepTouchCommit returned nil for failing fn")
+		if eerr := ui.StepTouch("/k/id_ed25519_sk", "the commit signing", "sk-ssh-ed25519@openssh.com", "commit", "committing", func() error { return want }); eerr == nil {
+			t.Fatal("StepTouch returned nil for failing fn")
 		}
 		got := err.String()
 		if !strings.Contains(got, "FAIL") || !strings.Contains(got, "agent unreachable") {
@@ -308,8 +308,8 @@ func TestStepTouchCommitNonTTY(t *testing.T) {
 
 func TestStepTouchPushNonTTY(t *testing.T) {
 	ui, _, err := newTestUI()
-	if eerr := ui.StepTouchPush("/k/id_ed25519_sk", "the push", "sk-ssh-ed25519@openssh.com", "push", "pushing commit and tags to remote", func() error { return nil }); eerr != nil {
-		t.Fatalf("StepTouchPush returned error: %v", eerr)
+	if eerr := ui.StepTouch("/k/id_ed25519_sk", "the push", "sk-ssh-ed25519@openssh.com", "push", "pushing commit and tags to remote", func() error { return nil }); eerr != nil {
+		t.Fatalf("StepTouch returned error: %v", eerr)
 	}
 	got := err.String()
 	if !strings.Contains(got, "push") || !strings.Contains(got, "OK") {

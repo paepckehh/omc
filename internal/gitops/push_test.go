@@ -50,7 +50,7 @@ func TestPushToRemote(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	h, err := Commit(repo, wt, CommitMessage{Subject: "push me"})
+	h, err := Commit(repo, CommitMessage{Subject: "push me"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestPushToRemoteUpToDate(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Commit(repo, wt, CommitMessage{Subject: "only commit"}); err != nil {
+	if _, err := Commit(repo, CommitMessage{Subject: "only commit"}); err != nil {
 		t.Fatal(err)
 	}
 

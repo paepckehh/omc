@@ -20,6 +20,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/hiddeco/sshsig"
@@ -38,12 +39,12 @@ const (
 // signatures over arbitrary payloads.
 type Signer struct {
 	signer ssh.Signer
-	// psuedoKeyType overrides the algorithm reported by PublicAlgorithm
+	// pseudoKeyType overrides the algorithm reported by PublicAlgorithm
 	// when the signer delegates to the ssh-agent: the agent presents a
 	// security-key identity as a plain ed25519/ecdsa key (it strips the
 	// sk-* type), but the produced signature is an sk signature, so the
 	// algorithm string must reflect the sk-* type for git/devices.
-	psuedoKeyType string
+	pseudoKeyType string
 }
 
 // Kind classifies what lives at a key path, so callers can pick the right
@@ -89,18 +90,10 @@ func IsSecurityKeyPath(path string) bool {
 	if path == "" {
 		return false
 	}
-	for _, n := range securityKeyNames {
-		if path == n {
-			return true
-		}
-	}
 	base := filepath.Base(path)
-	for _, n := range securityKeyNames {
-		if base == n || strings.HasPrefix(base, n+".") || strings.HasPrefix(base, n+"_") {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(securityKeyNames, func(n string) bool {
+		return base == n || strings.HasPrefix(base, n+".") || strings.HasPrefix(base, n+"_")
+	})
 }
 
 // DetectKind reads the file at path and reports what kind of key it is.
@@ -204,7 +197,7 @@ func SecurityKeySigner(keyPath string) (*Signer, error) {
 		return nil, fmt.Errorf("ssh-agent does not hold security key %s (add it with: ssh-add %s)", filepath.Base(keyPath), keyPath)
 	}
 
-	return &Signer{signer: &agentSigner{signer: found, conn: conn}, psuedoKeyType: skTypeOf(found)}, nil
+	return &Signer{signer: &agentSigner{signer: found, conn: conn}, pseudoKeyType: skTypeOf(found)}, nil
 }
 
 // skTypeOf returns the sk-* algorithm an agent-backed security-key signer
@@ -286,8 +279,8 @@ func (s *Signer) Sign(data []byte) ([]byte, error) {
 // security-key key). It is exposed so the CLI can state exactly which
 // algorithm a signing notice refers to.
 func (s *Signer) PublicAlgorithm() string {
-	if s.psuedoKeyType != "" {
-		return s.psuedoKeyType
+	if s.pseudoKeyType != "" {
+		return s.pseudoKeyType
 	}
 	switch s.signer.PublicKey().Type() {
 	case ssh.KeyAlgoRSA:

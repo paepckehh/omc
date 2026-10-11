@@ -12,7 +12,7 @@ import (
 	"net"
 	"os"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -62,10 +62,10 @@ func Open() (*git.Repository, *git.Worktree, error) {
 type RepoContext struct {
 	// Dir is the worktree root path (the containing directory for .git).
 	Dir string
-	// Remotes maps each configured remote name to its URL list. go-git stores
-	// the fetch URLs in RemoteConfig.URLs; the first URL is used for fetch
-	// and all of them are tried for push (matching git's behavior when no
-	// separate pushurl is set).
+	// Remotes maps each configured remote name to its URL list. go-git
+	// fetches through the first URL and pushes through the last one
+	// (matching how Remote.Fetch/Remote.Push pick it), so the push auth is
+	// derived from the last URL (see getSSHAuth).
 	Remotes map[string][]string
 	// LatestTag is the highest semver tag name (with leading "v"), or empty
 	// when no semver tag exists.
@@ -109,7 +109,7 @@ func StageAll(wt *git.Worktree) error {
 // commit the diff covers the full tree. The returned fileNames slice lists
 // the paths touched (post-rename names), suitable as a compact summary for
 // an LLM prompt; it is empty when nothing changed.
-func StagedDiff(repo *git.Repository, wt *git.Worktree) (diff string, fileNames []string, err error) {
+func StagedDiff(repo *git.Repository) (diff string, fileNames []string, err error) {
 	var from *object.Tree
 	if ref, e := repo.Head(); e == nil {
 		c, e := repo.CommitObject(ref.Hash())
@@ -182,9 +182,6 @@ type Identity struct {
 // ResolveIdentity returns the commit identity: OMC_NAME/OMC_EMAIL
 // first, then the standard GIT_AUTHOR_*/GIT_COMMITTER_* variables, then the
 // repository's git config, and finally the built-in defaults.
-// ResolveIdentity returns the commit identity: OMC_NAME/OMC_EMAIL
-// first, then the standard GIT_AUTHOR_*/GIT_COMMITTER_* variables, then the
-// repository's git config, and finally the built-in defaults.
 func ResolveIdentity(repo *git.Repository) Identity {
 	sig := Identity{Name: DefaultName, Email: DefaultEmail}
 	nameEnv := envOr("OMC_NAME", "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME")
@@ -207,9 +204,6 @@ func ResolveIdentity(repo *git.Repository) Identity {
 	}
 	return sig
 }
-
-// identity reads the identity from the environment and, failing that, from
-// the repository's git config, and finally falls back to fixed defaults.
 
 // envOr returns the first non-empty environment variable among keys.
 func envOr(keys ...string) string {
@@ -235,8 +229,8 @@ func (m CommitMessage) String() string {
 	s := strings.TrimSpace(m.Subject)
 	b := strings.TrimSpace(m.Body)
 	switch {
-	case s == "" && b == "":
-		return ""
+	case s == "":
+		return b
 	case b == "":
 		return s
 	default:
@@ -270,17 +264,11 @@ func parentsOf(repo *git.Repository) ([]plumbing.Hash, error) {
 // Commit creates a new commit from the current index, using the given
 // message, and advances the current branch. It returns the new commit's
 // hash. When msg is empty the subject falls back to "update".
-func Commit(repo *git.Repository, wt *git.Worktree, msg CommitMessage) (plumbing.Hash, error) {
-	treeHash, err := writeIndexTree(repo)
+func Commit(repo *git.Repository, msg CommitMessage) (plumbing.Hash, error) {
+	treeHash, parents, sig, err := commitPreamble(repo)
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
-	parents, err := parentsOf(repo)
-	if err != nil {
-		return plumbing.ZeroHash, err
-	}
-
-	sig := signatureFrom(ResolveIdentity(repo))
 	commit := &object.Commit{
 		Author:       sig,
 		Committer:    sig,
@@ -304,22 +292,30 @@ func Commit(repo *git.Repository, wt *git.Worktree, msg CommitMessage) (plumbing
 	return hash, nil
 }
 
+// commitPreamble gathers the parts every commit builder needs: the index
+// tree hash, the parent commits, and the author/committer signature.
+func commitPreamble(repo *git.Repository) (plumbing.Hash, []plumbing.Hash, object.Signature, error) {
+	treeHash, err := writeIndexTree(repo)
+	if err != nil {
+		return plumbing.ZeroHash, nil, object.Signature{}, err
+	}
+	parents, err := parentsOf(repo)
+	if err != nil {
+		return plumbing.ZeroHash, nil, object.Signature{}, err
+	}
+	return treeHash, parents, signatureFrom(ResolveIdentity(repo)), nil
+}
+
 // SignedCommit creates a commit like Commit but embeds an armored SSH
 // signature into the commit object, mirroring how git signs commits with
 // "git commit -S" and the ssh format. The signature covers exactly the
 // header bytes git signs (tree/parent/author/committer lines); the message
 // is not part of the signed payload, just as in git.
-func SignedCommit(repo *git.Repository, wt *git.Worktree, msg CommitMessage, armoredSign func([]byte) ([]byte, error)) (plumbing.Hash, error) {
-	treeHash, err := writeIndexTree(repo)
+func SignedCommit(repo *git.Repository, msg CommitMessage, armoredSign func([]byte) ([]byte, error)) (plumbing.Hash, error) {
+	treeHash, parents, sig, err := commitPreamble(repo)
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
-	parents, err := parentsOf(repo)
-	if err != nil {
-		return plumbing.ZeroHash, err
-	}
-
-	sig := signatureFrom(ResolveIdentity(repo))
 
 	// Header block: identical to what git signs for a signed commit.
 	var headers bytes.Buffer
@@ -451,8 +447,8 @@ type indexNode struct {
 // walkTree writes tree objects to the storer recursively and returns the
 // root hash.
 func walkTree(repo *git.Repository, tree *object.Tree, kids []*indexNode) (plumbing.Hash, error) {
-	sort.Slice(kids, func(i, j int) bool {
-		return indexOrder(kids[i]) < indexOrder(kids[j])
+	slices.SortFunc(kids, func(a, b *indexNode) int {
+		return strings.Compare(indexOrder(a), indexOrder(b))
 	})
 	for _, k := range kids {
 		if !k.hash.IsZero() && k.mode != 0 {
@@ -579,8 +575,6 @@ func NextSemverTag(latest string) string {
 
 // CreateTag creates an annotated tag pointing at hash, using message as the
 // tag message and id as the tagger identity. It returns the created reference.
-// CreateTag creates an annotated tag pointing at hash, using message as the
-// tag message and id as the tagger identity. It returns the created reference.
 func CreateTag(repo *git.Repository, hash plumbing.Hash, name, message string, id Identity) (*plumbing.Reference, error) {
 	if err := ensureTagAbsent(repo, name); err != nil {
 		return nil, err
@@ -667,9 +661,6 @@ func tagPayload(name string, target plumbing.Hash, message string, id Identity) 
 	return b.Bytes(), nil
 }
 
-// buildTagObject assembles the full tag object content, optionally with a
-// trailing armored signature block.
-
 // storeTagObject writes raw tag object bytes into the object database and
 // returns the new object's hash.
 func storeTagObject(repo *git.Repository, content []byte) (plumbing.Hash, error) {
@@ -740,6 +731,36 @@ type PushResult struct {
 // push to.
 var ErrNoRemoteConfigured = fmt.Errorf("no remote configured")
 
+// defaultRemoteConfig returns the config of the remote that fetch, pull and
+// push operations target: "origin" when it has URLs, otherwise the
+// lexicographically first remote that has URLs (map iteration order is
+// random, so the choice must not be). Remotes without URLs cannot be
+// contacted and are skipped. The error distinguishes a repository without any
+// remote from one whose remotes all lack URLs.
+func defaultRemoteConfig(repo *git.Repository) (*config.RemoteConfig, error) {
+	cfg, err := repo.Config()
+	if err != nil {
+		return nil, fmt.Errorf("read remote config: %w", err)
+	}
+	if len(cfg.Remotes) == 0 {
+		return nil, ErrNoRemoteConfigured
+	}
+	if r, ok := cfg.Remotes[git.DefaultRemoteName]; ok && len(r.URLs) > 0 {
+		return r, nil
+	}
+	names := make([]string, 0, len(cfg.Remotes))
+	for name := range cfg.Remotes {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		if len(cfg.Remotes[name].URLs) > 0 {
+			return cfg.Remotes[name], nil
+		}
+	}
+	return nil, fmt.Errorf("%w with a URL", ErrNoRemoteConfigured)
+}
+
 // PushToRemote pushes the current branch and all local tags to the
 // repository's default remote, the go-git equivalent of "git push; git
 // push --tags". keyPath is an optional SSH private key used for
@@ -750,30 +771,15 @@ var ErrNoRemoteConfigured = fmt.Errorf("no remote configured")
 // ErrForceNeeded / non-fast-forward errors from the tag pass are returned
 // as errors; the branch push itself already succeeded at that point.
 func PushToRemote(repo *git.Repository, keyPath string) (PushResult, error) {
-	cfg, err := repo.Config()
+	// Prefer "origin", like git; otherwise the lexicographically first
+	// remote that has URLs (see defaultRemoteConfig).
+	remoteCfg, err := defaultRemoteConfig(repo)
 	if err != nil {
-		return PushResult{}, fmt.Errorf("read remote config: %w", err)
-	}
-	if len(cfg.Remotes) == 0 {
-		return PushResult{}, ErrNoRemoteConfigured
+		return PushResult{}, err
 	}
 
-	// Prefer "origin", like git; otherwise use the first configured
-	// remote. The default branch refspec is resolved by go-git
-	// (refs/heads/*:refs/heads/*).
-	remoteName := git.DefaultRemoteName
-	if _, ok := cfg.Remotes[remoteName]; !ok {
-		for name := range cfg.Remotes {
-			remoteName = name
-			break
-		}
-	}
-	remoteCfg := cfg.Remotes[remoteName]
-
-	// Keep the remote config in scope: the Remote abstraction is
-	// constructed for each pass below, so the config object must stay
-	// alive between pushes. Reading the branch from HEAD names the
-	// explicit refspec for the first pass.
+	// Reading the branch from HEAD names the explicit refspec for the
+	// branch pass.
 	branch := ""
 	if ref, err := repo.Head(); err == nil && ref.Name().IsBranch() {
 		branch = ref.Name().Short()
@@ -784,7 +790,7 @@ func PushToRemote(repo *git.Repository, keyPath string) (PushResult, error) {
 		return PushResult{}, err
 	}
 
-	opts := &git.PushOptions{RemoteName: remoteName, Auth: auth}
+	opts := &git.PushOptions{RemoteName: remoteCfg.Name, Auth: auth}
 	if branch != "" {
 		opts.RefSpecs = []config.RefSpec{
 			config.RefSpec("refs/heads/" + branch + ":refs/heads/" + branch),
@@ -792,7 +798,7 @@ func PushToRemote(repo *git.Repository, keyPath string) (PushResult, error) {
 	}
 	if err := pushOnce(repo, remoteCfg, opts); err != nil {
 		if errors.Is(err, git.NoErrAlreadyUpToDate) {
-			return PushResult{Remote: remoteName, Branch: branch, Tags: false}, nil
+			return PushResult{Remote: remoteCfg.Name, Branch: branch, Tags: false}, nil
 		}
 		return PushResult{}, err
 	}
@@ -801,24 +807,62 @@ func PushToRemote(repo *git.Repository, keyPath string) (PushResult, error) {
 	// that exists locally. Like git, the tag refspec is forced, so a
 	// remote tag that already points elsewhere is updated.
 	if err := pushOnce(repo, remoteCfg, &git.PushOptions{
-		RemoteName: remoteName,
+		RemoteName: remoteCfg.Name,
 		Auth:       auth,
 		RefSpecs:   []config.RefSpec{config.RefSpec("+refs/tags/*:refs/tags/*")},
 	}); err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return PushResult{
-			Remote: remoteName,
+			Remote: remoteCfg.Name,
 			Branch: branch,
 			Tags:   false,
 		}, fmt.Errorf("push tags: %w", err)
 	}
 
-	return PushResult{Remote: remoteName, Branch: branch, Tags: true}, nil
+	return PushResult{Remote: remoteCfg.Name, Branch: branch, Tags: true}, nil
 }
 
 // pushOnce runs a single push operation through the Remote abstraction.
 func pushOnce(repo *git.Repository, cfg *config.RemoteConfig, opts *git.PushOptions) error {
 	remote := git.NewRemote(repo.Storer, cfg)
 	return remote.PushContext(context.Background(), opts)
+}
+
+// PullTags fetches the default remote's refs into the local repository, the
+// go-git equivalent of "git fetch --tags", so a tag generated afterwards
+// starts from the freshest tag state: tags pushed from another machine in
+// the meantime become visible locally and the bumped name cannot collide
+// with a tag that already exists upstream. Local tags the remote does not
+// have are never pruned; a local tag that diverged from a same-named remote
+// tag follows the remote (the local tag object itself stays in the object
+// database). keyPath is the optional SSH private key used for
+// authentication, exactly like PushToRemote; for file:// or https URLs it is
+// not applicable.
+//
+// A repository without a usable remote has nothing to pull; that is success,
+// not a failure (the caller is refreshing best-effort tag state). Any other
+// error is real: NoErrAlreadyUpToDate (a remote without tags) is success.
+// Callers degrade: a failed pull is a warning, never a block.
+func PullTags(repo *git.Repository, keyPath string) error {
+	r, err := defaultRemoteConfig(repo)
+	if errors.Is(err, ErrNoRemoteConfigured) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	auth, err := getSSHAuth(keyPath, r.URLs)
+	if err != nil {
+		return err
+	}
+	err = git.NewRemote(repo.Storer, r).FetchContext(context.Background(), &git.FetchOptions{
+		RemoteName: r.Name,
+		Auth:       auth,
+		RefSpecs:   []config.RefSpec{config.RefSpec("+refs/tags/*:refs/tags/*")},
+	})
+	if errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return nil
+	}
+	return err
 }
 
 // getSSHAuth builds an SSH auth method from an SSH private key path,
@@ -840,6 +884,9 @@ func pushOnce(repo *git.Repository, cfg *config.RemoteConfig, opts *git.PushOpti
 // known_hosts at all still fails with a warning rather than silently
 // trusting an unknown server.
 func getSSHAuth(keyPath string, remoteURLs []string) (transport.AuthMethod, error) {
+	if len(remoteURLs) == 0 {
+		return nil, nil
+	}
 	last := remoteURLs[len(remoteURLs)-1]
 	ep, err := transport.NewEndpoint(last)
 	if err != nil {
@@ -890,8 +937,8 @@ func getSSHAuth(keyPath string, remoteURLs []string) (transport.AuthMethod, erro
 
 	if err := applyKnownHosts(auth, hostWithPort); err != nil {
 		// A broken known_hosts setup degrades like every other push
-		// problem: warn via the returned error path but keep the auth
-		// method so the caller can still attempt the push.
+		// problem: the error surfaces to the caller, which warns and
+		// leaves the commit and tag local (never rolled back).
 		return auth, err
 	}
 	return auth, nil

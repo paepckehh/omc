@@ -38,7 +38,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -60,8 +61,6 @@ var palette = struct {
 	muted       lipgloss.Color
 	accent      lipgloss.Color
 	detail      lipgloss.Color
-	hash        lipgloss.Color
-	signed      lipgloss.Color
 	timestamp   lipgloss.Color
 	info        lipgloss.Color
 	step        lipgloss.Color
@@ -81,8 +80,6 @@ var palette = struct {
 	muted:       lipgloss.Color("#6E7681"),
 	accent:      lipgloss.Color("#58A6FF"),
 	detail:      lipgloss.Color("#A371F7"),
-	hash:        lipgloss.Color("#79C0FF"),
-	signed:      lipgloss.Color("#56D364"),
 	timestamp:   lipgloss.Color("#6E7681"),
 	info:        lipgloss.Color("#58A6FF"),
 	step:        lipgloss.Color("#A371F7"),
@@ -168,22 +165,13 @@ type styles struct {
 	msg          lipgloss.Style
 	key          lipgloss.Style
 	val          lipgloss.Style
-	ok           lipgloss.Style
-	warn         lipgloss.Style
-	fail         lipgloss.Style
 	muted        lipgloss.Style
-	subject      lipgloss.Style
-	body         lipgloss.Style
-	hash         lipgloss.Style
-	signed       lipgloss.Style
-	meta         lipgloss.Style
 	bullet       lipgloss.Style
 	fileItem     lipgloss.Style
 	frameBox     lipgloss.Style
 	frameSubject lipgloss.Style
 	frameBody    lipgloss.Style
 	frameTitle   lipgloss.Style
-	frameMuted   lipgloss.Style
 	tree         lipgloss.Style
 }
 
@@ -227,15 +215,7 @@ func (u *UI) initStyles() {
 		msg:       base.Foreground(palette.val),
 		key:       base.Foreground(palette.key),
 		val:       base.Foreground(palette.val),
-		ok:        base.Bold(true).Foreground(palette.success),
-		warn:      base.Bold(true).Foreground(palette.warn),
-		fail:      base.Bold(true).Foreground(palette.err),
 		muted:     base.Foreground(palette.muted),
-		subject:   base.Bold(true).Foreground(palette.subject),
-		body:      base.Foreground(palette.detail),
-		hash:      base.Foreground(palette.hash).Bold(true),
-		signed:    base.Foreground(palette.signed).Bold(true),
-		meta:      base.Foreground(palette.muted),
 		bullet:    base.Foreground(palette.accent),
 		fileItem:  base.Foreground(palette.accent),
 		frameBox: base.
@@ -246,7 +226,6 @@ func (u *UI) initStyles() {
 		frameSubject: base.Bold(true).Foreground(palette.subject).Background(palette.frameBg),
 		frameBody:    base.Foreground(palette.detail).Background(palette.frameBg),
 		frameTitle:   base.Bold(true).Foreground(palette.frameTitle).Background(palette.frameBg),
-		frameMuted:   base.Foreground(palette.muted).Background(palette.frameBg),
 		tree:         base.Foreground(palette.tree),
 	}
 }
@@ -604,20 +583,15 @@ func stepIcon(step string) string {
 // error on failure). It returns fn's error so the caller can decide whether
 // to abort.
 func (u *UI) Step(step, msg string, fn func() error) error {
-	if !u.tty {
+	if u.tty {
+		u.startSpinner(step, msg)
+	} else {
 		u.emit(u.Err, "INFO", step, msg)
-		err := fn()
-		if err != nil {
-			u.emit(u.Err, "FAIL", step, err.Error(), F("err", err.Error()))
-			return err
-		}
-		u.emit(u.Err, "OK", step, "done")
-		return nil
 	}
-
-	u.startSpinner(step, msg)
 	err := fn()
-	u.stopSpinner()
+	if u.tty {
+		u.stopSpinner()
+	}
 
 	if err != nil {
 		u.emit(u.Err, "FAIL", step, err.Error(), F("err", err.Error()))
@@ -766,11 +740,6 @@ func (u *UI) Println(s string) {
 	fmt.Fprintln(u.Out, s)
 }
 
-// println writes a line terminated string to w.
-func (u *UI) println(w io.Writer, s string) {
-	fmt.Fprintln(w, s)
-}
-
 // --- Final result rendering ---------------------------------------------------
 
 // CommitResult renders the final "committed" structured record to stdout.
@@ -780,7 +749,7 @@ func (u *UI) println(w io.Writer, s string) {
 func (u *UI) CommitResult(hash string, signed bool) {
 	u.emit(u.Out, "OK", "commit", "committed",
 		F("hash", hash),
-		F("signed", fmt.Sprintf("%v", signed)),
+		F("signed", strconv.FormatBool(signed)),
 	)
 }
 
@@ -792,7 +761,7 @@ func (u *UI) TagResult(name, shortHash string, signed bool) {
 	u.emit(u.Out, "OK", "tag", "tagged",
 		F("tag", name),
 		F("hash", shortHash),
-		F("signed", fmt.Sprintf("%v", signed)),
+		F("signed", strconv.FormatBool(signed)),
 	)
 }
 
@@ -831,7 +800,7 @@ func (u *UI) FileList(files []string) {
 	for _, f := range files {
 		lines = append(lines, fmt.Sprintf("  %s %s", u.styles.bullet.Render("›"), u.styles.fileItem.Render(f)))
 	}
-	u.println(u.Err, lipgloss.JoinVertical(lipgloss.Left, lines...))
+	fmt.Fprintln(u.Err, lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 // Summary renders the resolved commit subject and (optional) LLM body to
@@ -895,7 +864,7 @@ func (u *UI) RepoContextNotice(dir, latestTag string, remotes map[string][]strin
 	for n := range remotes {
 		names = append(names, n)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	if len(names) == 0 {
 		fields = append(fields, F("remotes", "(none)"))
 	}
@@ -1008,12 +977,8 @@ func (c *touchCountdown) render() string {
 
 	var bar strings.Builder
 	bar.Grow(countdownBarWidth)
-	for range full {
-		bar.WriteString("▰")
-	}
-	for range empty {
-		bar.WriteString("▱")
-	}
+	bar.WriteString(strings.Repeat("▰", full))
+	bar.WriteString(strings.Repeat("▱", empty))
 	barStyled := lipgloss.NewStyle().Foreground(palette.warn).Render(bar.String())
 	key := lipgloss.NewStyle().Bold(true).Foreground(palette.warn).Render("🔑 TOUCH YOUR SECURITY KEY")
 	timer := lipgloss.NewStyle().Bold(true).Foreground(palette.err).Render("⏱ " + c.fmtSeconds())
@@ -1258,26 +1223,12 @@ func (u *UI) stepTouchInfo(step, msg, keyPath, action, algorithm string, fn func
 	return nil
 }
 
-// StepTouchCommit runs the commit-signing step fn while showing the animated
-// touch countdown (TTY) or the structured step records (non-TTY). Use it for
-// the smartcard commit-signing path so the user is prompted to touch the
-// device right now. keyPath and action name the operation; algorithm is the
-// signing algorithm so the touch confirmation is specific.
-func (u *UI) StepTouchCommit(keyPath, action, algorithm, step, msg string, fn func() error) error {
-	return u.stepTouchInfo(step, msg, keyPath, action, algorithm, fn)
-}
-
-// StepTouchTag runs the tag-signing step fn with the touch countdown. Use it
-// for the smartcard tag-signing path. keyPath and action name the operation;
-// algorithm is the signing algorithm.
-func (u *UI) StepTouchTag(keyPath, action, algorithm, step, msg string, fn func() error) error {
-	return u.stepTouchInfo(step, msg, keyPath, action, algorithm, fn)
-}
-
-// StepTouchPush runs the SSH push step fn with the touch countdown when the
-// push key is a security-key handle. Use it for the smartcard push path.
-// keyPath and action name the operation; algorithm is the signing algorithm.
-func (u *UI) StepTouchPush(keyPath, action, algorithm, step, msg string, fn func() error) error {
+// StepTouch runs fn while showing the animated touch countdown (TTY) or the
+// structured step records (non-TTY). Use it for every smartcard-bound step
+// (commit signing, tag signing, SSH push) so the user is prompted to touch
+// the device right now. keyPath and action name the operation; algorithm is
+// the signing algorithm so the touch confirmation is specific.
+func (u *UI) StepTouch(keyPath, action, algorithm, step, msg string, fn func() error) error {
 	return u.stepTouchInfo(step, msg, keyPath, action, algorithm, fn)
 }
 

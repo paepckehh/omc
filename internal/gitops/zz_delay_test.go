@@ -40,7 +40,7 @@ func TestSignedTagDelayForcesTimestampSplit(t *testing.T) {
 	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
 		t.Fatal(err)
 	}
-	h, err := Commit(repo, wt, CommitMessage{Subject: "s"})
+	h, err := Commit(repo, CommitMessage{Subject: "s"})
 	if err != nil {
 		t.Fatal(err)
 	}

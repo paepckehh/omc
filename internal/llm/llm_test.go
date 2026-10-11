@@ -14,9 +14,9 @@ func makeSection(n int) string {
 	b.WriteString("--- a/file.txt\n")
 	b.WriteString("+++ b/file.txt\n")
 	b.WriteString("@@ -1,n +1,n @@\n")
-	for i := 0; i < n; i++ {
+	for i := range n {
 		b.WriteString("+line ")
-		b.WriteString(itoa(i))
+		b.WriteString(strconv.Itoa(i))
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -92,7 +92,7 @@ func TestTruncateDiff_Empty(t *testing.T) {
 func TestTruncateDiff_NoHeaders(t *testing.T) {
 	// No "diff --git" lines → whole text treated as one section.
 	var b strings.Builder
-	for i := 0; i < 250; i++ {
+	for range 250 {
 		b.WriteString("+some line\n")
 	}
 	got := truncateDiff(b.String())
@@ -106,16 +106,6 @@ func TestDetailPrompt_ContainsTruncatedDiff(t *testing.T) {
 	prompt := DetailPrompt(section, "  - file.txt")
 	if !strings.Contains(prompt, "diff truncated") {
 		t.Fatalf("expected DetailPrompt to contain truncated diff")
-	}
-}
-
-func TestItoa(t *testing.T) {
-	cases := []int{0, 1, 9, 10, 250, -5}
-	for _, n := range cases {
-		want := strconv.Itoa(n)
-		if got := itoa(n); got != want {
-			t.Errorf("itoa(%d) = %q, want %q", n, got, want)
-		}
 	}
 }
 
