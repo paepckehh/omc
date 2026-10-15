@@ -85,14 +85,6 @@ func (u *UI) SetNotifier(n notify.Notifier) {
 	u.mu.Unlock()
 }
 
-// Notifier returns the currently installed desktop notification backend
-// (nil when none).
-func (u *UI) Notifier() notify.Notifier {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	return u.notifier
-}
-
 // TouchBegin implements touch.Hook: it starts the prompt for a smartcard
 // touch wait. See the package comment for the full behavior.
 func (u *UI) TouchBegin(ev touch.Event) {
@@ -292,10 +284,7 @@ func (u *UI) startTouchProgress(p *touchPrompt) {
 					F("elapsed", elapsed.Round(time.Second).String()),
 				}
 				if p.ev.Timeout > 0 {
-					remaining := p.ev.Timeout - elapsed
-					if remaining < 0 {
-						remaining = 0
-					}
+					remaining := max(p.ev.Timeout-elapsed, 0)
 					fields = append(fields, F("remaining", remaining.Round(time.Second).String()))
 				}
 				if p.ev.Action != "" {

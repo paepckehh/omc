@@ -77,13 +77,11 @@ const (
 var ErrSecurityKeyOnly = errors.New("security key (FIDO2) private key cannot be used without the ssh-agent")
 
 // securityKeyNames are the conventional file names of FIDO2 security-key
-// key pairs created by "ssh-keygen -t ed25519-sk" and "-t ecdsa-sk". The
-// _rk variants are used when a resident/discoverable credential was
-// requested. Names are matched after the |_sk| prefix, so platform-specific
-// suffixes (e.g. "id_ed25519_sk_rk") are honored too.
+// key pairs created by "ssh-keygen -t ed25519-sk" and "-t ecdsa-sk". Names
+// are matched after the |_sk| prefix, so resident-key ("_rk") and other
+// platform-specific suffixes (e.g. "id_ed25519_sk_rk") are honored too.
 var securityKeyNames = []string{
 	"id_ed25519_sk", "id_ecdsa_sk",
-	"id_ed25519_sk_rk", "id_ecdsa_sk_rk",
 }
 
 // IsSecurityKeyPath reports whether a key path names a FIDO2 security-key

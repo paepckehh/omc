@@ -45,7 +45,9 @@ developer contract.
   tag/pull/push. Touch prompts (records, TTY countdown, optional desktop
   notification via D-Bus — `github.com/godbus/dbus/v5`, pure Go) attach to
   the signature requests themselves, so the commit, the tag, the upstream
-  tag pull and the push all prompt identically. If Ollama is unreachable or the LLM
+  tag pull and the push all prompt identically. The D-Bus notification
+  backend is only probed when a security-key path (sign or push key) is
+  configured, so non-smartcard runs never touch D-Bus at all. If Ollama is unreachable or the LLM
   call fails, fall back to the OpenAI-compatible endpoint
   (`OPENAPI_*`, with `OPENAPI_DESC_*` legacy aliases); if that is also unavailable or fails, fall back to
   `update`. If the key file is missing/invalid

@@ -97,10 +97,13 @@ func run() int {
 	// over the D-Bus org.freedesktop.Notifications interface (GNOME, KDE,
 	// XFCE, ...), never an external binary. Best-effort: nil when no
 	// session bus or notification daemon is reachable, and every call is
-	// bounded so a hung daemon cannot stall the run.
-	if notifier := notify.Detect(cfg.TouchNotify); notifier != nil {
-		ui.SetNotifier(notifier)
-		if sign.IsSecurityKeyPath(cfg.KeyPath) || sign.IsSecurityKeyPath(cfg.PushKeyPath) {
+	// bounded so a hung daemon cannot stall the run. Detection is only
+	// attempted when a security-key path is configured — every other run
+	// skips the D-Bus round trips entirely.
+	skAnywhere := sign.IsSecurityKeyPath(cfg.KeyPath) || sign.IsSecurityKeyPath(cfg.PushKeyPath)
+	if skAnywhere {
+		if notifier := notify.Detect(cfg.TouchNotify); notifier != nil {
+			ui.SetNotifier(notifier)
 			ui.Info("desktop notifications available for security-key touch prompts (%s)", notifier.Describe())
 		}
 	}

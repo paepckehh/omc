@@ -230,8 +230,8 @@ commit signing, the tag signing, the upstream tag pull, the push — is a
 - after a few seconds without a touch, a desktop notification pops up
   ("omc: security key touch required") through the freedesktop
   `org.freedesktop.Notifications` D-Bus interface — GNOME, KDE, XFCE, … —
-  detected at runtime, pure Go, no `notify-send` binary. `OMC_TOUCH_NOTIFY=off`
-  disables it;
+  detected at runtime (only probed when a security-key path is configured),
+  pure Go, no `notify-send` binary. `OMC_TOUCH_NOTIFY=off` disables it;
 - the wait is **bounded** by `OMC_TOUCH_TIMEOUT` (default 60s, `0` = forever,
   like OpenSSH): on timeout omc degrades exactly like for any unusable key —
   warn, commit unsigned, skip signing the tag — instead of hanging forever.
@@ -503,7 +503,7 @@ omc
 | `OMC_TAG` | Override the tag name. Used only when it is strict semver `vMAJOR.MINOR.PATCH`; otherwise the auto-bump runs. See [Message & tag overrides](#-message--tag-overrides). |
 | `OMC_PUSH_KEY_PATH` | Path to an SSH **private** key. When set and readable, pushes the new commit and tags to the default remote after tagging (`git push; git push --tags`). Also used to authenticate the pre-tag **upstream tag pull**. A **FIDO2 security-key handle** is supported (auth via ssh-agent + smartcard). If set but unusable, or the push fails, warns and leaves the commit/tag local. |
 | `OMC_TOUCH_TIMEOUT` | Seconds to wait for a FIDO2 security-key (yubikey) touch before degrading. Every smartcard wait — commit signing, tag signing, upstream tag pull, push — is bounded by it. Default `60`; `0` waits forever (OpenSSH behavior). On timeout: commit unsigned, tag/pull/push warn and continue. |
-| `OMC_TOUCH_NOTIFY` | Desktop notifications while a touch is pending. `auto` (default) detects a freedesktop notification daemon via D-Bus at runtime (GNOME, KDE, XFCE, …); `on` skips the daemon probe; `off` disables. Pure Go, no `notify-send` binary; the notification appears after a few seconds without a touch, so quick touches stay quiet. |
+| `OMC_TOUCH_NOTIFY` | Desktop notifications while a touch is pending. `auto` (default) detects a freedesktop notification daemon via D-Bus at runtime (GNOME, KDE, XFCE, …); `on` skips the daemon probe; `off` disables. Detection only runs when a security-key path is configured. Pure Go, no `notify-send` binary; the notification appears after a few seconds without a touch, so quick touches stay quiet. |
 
 > [!WARNING]
 > **Signing:** only passphrase-less software keys are supported (there is no
