@@ -135,6 +135,18 @@ The Makefile overrides the constant at link time with the git tag via
 build` uses the hardwired constant. Either way the version printed at
 startup is correct as long as the constant and the latest tag agree.
 
+## Release pipeline (GoReleaser)
+
+Pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs
+GoReleaser (pinned `v2.18.2`) on `ubuntu-24.04` with the Go version from
+`go.mod`. The build matrix in `.goreleaser.yml` is **linux, darwin,
+openbsd × amd64, arm64** (CGO disabled). freebsd is excluded because
+`internal/notify` depends on `github.com/godbus/dbus/v5`, which does not
+build there; windows builds but is not shipped. Before adding a target,
+verify it with `CGO_ENABLED=0 GOOS=x GOARCH=y go build ./cmd/omc`, and
+sanity-check the config with `goreleaser check` or a
+`goreleaser release --snapshot --clean` dry run.
+
 ## Auto semver tagging
 
 After every successful commit, `omc` tags that commit with a semver tag.
