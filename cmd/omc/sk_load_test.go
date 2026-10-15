@@ -12,6 +12,7 @@ import (
 
 	"paepcke.de/omc/internal/config"
 	"paepcke.de/omc/internal/output"
+	"paepcke.de/omc/internal/sign"
 )
 
 // writeSoftwareKey writes a fresh OpenSSH-format ed25519 private key to
@@ -46,7 +47,7 @@ func TestLoadSignerSecurityKeyNoAgent(t *testing.T) {
 	}
 
 	ui := output.New(os.Stdout, os.Stderr)
-	signer, _ := loadSigner(ui, config.Config{KeyPath: handle})
+	signer, _ := loadSigner(ui, config.Config{KeyPath: handle}, sign.TouchConfig{})
 	if signer != nil {
 		t.Fatalf("loadSigner returned a signer for an sk handle without an agent; want nil (degrade to unsigned)")
 	}
@@ -62,7 +63,7 @@ func TestLoadSignerUnusableKey(t *testing.T) {
 	}
 
 	ui := output.New(os.Stdout, os.Stderr)
-	signer, _ := loadSigner(ui, config.Config{KeyPath: bad})
+	signer, _ := loadSigner(ui, config.Config{KeyPath: bad}, sign.TouchConfig{})
 	if signer != nil {
 		t.Fatalf("loadSigner returned a signer for corrupt key; want nil")
 	}
@@ -76,7 +77,7 @@ func TestLoadSignerSoftwareKey(t *testing.T) {
 	writeSoftwareKey(t, key)
 
 	ui := output.New(os.Stdout, os.Stderr)
-	signer, _ := loadSigner(ui, config.Config{KeyPath: key})
+	signer, _ := loadSigner(ui, config.Config{KeyPath: key}, sign.TouchConfig{})
 	if signer == nil {
 		t.Fatalf("loadSigner returned nil for a valid software key")
 	}

@@ -6,12 +6,14 @@ import (
 	"testing"
 
 	"github.com/go-git/go-git/v5"
+
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	"github.com/go-git/go-git/v5/plumbing/transport/server"
+	"paepcke.de/omc/internal/sign"
 )
 
 // TestPushToRemote pushes a local repo's branch and tags to a remote bare
@@ -58,7 +60,7 @@ func TestPushToRemote(t *testing.T) {
 	// Create the annotated tag that the pipeline would create.
 	tag := createTestTag(t, repo, h)
 
-	res, err := PushToRemote(repo, "")
+	res, err := PushToRemote(repo, "", sign.TouchConfig{})
 	if err != nil {
 		t.Fatalf("PushToRemote: %v", err)
 	}
@@ -91,7 +93,7 @@ func TestPushToRemote(t *testing.T) {
 // clear error but nothing else happens.
 func TestPushToRemoteNoRemote(t *testing.T) {
 	repo, _, _ := initTestRepo(t)
-	if _, err := PushToRemote(repo, ""); err == nil {
+	if _, err := PushToRemote(repo, "", sign.TouchConfig{}); err == nil {
 		t.Fatal("expected error for repo without remote")
 	}
 }
@@ -119,10 +121,10 @@ func TestPushToRemoteUpToDate(t *testing.T) {
 	}
 
 	// First push succeeds; second push finds nothing new on the branch.
-	if _, err := PushToRemote(repo, ""); err != nil {
+	if _, err := PushToRemote(repo, "", sign.TouchConfig{}); err != nil {
 		t.Fatalf("first push: %v", err)
 	}
-	if _, err := PushToRemote(repo, ""); err != nil {
+	if _, err := PushToRemote(repo, "", sign.TouchConfig{}); err != nil {
 		t.Fatalf("second push should be up-to-date, got: %v", err)
 	}
 	_ = bare
@@ -180,7 +182,7 @@ func TestPushToRemoteUpToDateBranchPushesPendingTags(t *testing.T) {
 	}
 
 	// The branch is now up to date. PushToRemote must not stop there.
-	res, err := PushToRemote(repo, "")
+	res, err := PushToRemote(repo, "", sign.TouchConfig{})
 	if err != nil {
 		t.Fatalf("PushToRemote: %v", err)
 	}
@@ -272,7 +274,7 @@ func TestPushToRemoteBackslashEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := PushToRemote(repo, ""); err != nil {
+	if _, err := PushToRemote(repo, "", sign.TouchConfig{}); err != nil {
 		t.Fatalf("PushToRemote with backslash-named tree entry failed: %v\n"+
 			"go-git's revlist must enumerate object names verbatim; this fails "+
 			"when go-git is upgraded past v5.19.0 (see go.mod pin comment).", err)

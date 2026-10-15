@@ -6,7 +6,9 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Config is the full runtime configuration derived from the environment.
@@ -55,7 +57,25 @@ type Config struct {
 	// disables pushing. When set but unusable, omc logs a warning and
 	// skips the push.
 	PushKeyPath string
+	// TouchTimeout bounds how long omc waits for a FIDO2 security-key
+	// (yubikey) touch before degrading (OMC_TOUCH_TIMEOUT, seconds).
+	// Every smartcard wait — commit signing, tag signing, the upstream
+	// tag pull, the push — is bounded by it; zero means wait forever,
+	// matching OpenSSH's own unbounded behavior.
+	TouchTimeout time.Duration
+	// TouchNotify selects desktop notifications for touch prompts
+	// (OMC_TOUCH_NOTIFY): "auto" (default, detect a notification daemon
+	// via D-Bus at runtime), "on" (force), or "off".
+	TouchNotify string
 }
+
+// DefaultTouchTimeout is the default wait for a security-key touch
+// (OMC_TOUCH_TIMEOUT overrides it). OpenSSH and libfido2 wait for the touch
+// indefinitely; omc's "always degrade, never block" contract instead fails
+// the signature after this budget and proceeds unsigned, so a forgotten
+// yubikey cannot hang a run. A generous default: it is a prompt window, not
+// a performance limit.
+const DefaultTouchTimeout = 60 * time.Second
 
 // FromEnv loads the configuration from the process environment.
 //
@@ -79,7 +99,26 @@ func FromEnv() Config {
 		Message:      os.Getenv("OMC_MESSAGE"),
 		Tag:          os.Getenv("OMC_TAG"),
 		PushKeyPath:  expandTilde(os.Getenv("OMC_PUSH_KEY_PATH")),
+		TouchTimeout: envSeconds("OMC_TOUCH_TIMEOUT", DefaultTouchTimeout),
+		TouchNotify:  os.Getenv("OMC_TOUCH_NOTIFY"),
 	}
+}
+
+// envSeconds parses a whole-seconds environment variable, returning def
+// when unset or unparsable and clipping negatives to zero (wait forever).
+func envSeconds(name string, def time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return def
+	}
+	if n < 0 {
+		n = 0
+	}
+	return time.Duration(n) * time.Second
 }
 
 // envOr returns the value of the first environment variable that is set and

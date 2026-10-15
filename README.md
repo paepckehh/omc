@@ -89,7 +89,7 @@ Set `OMC_SUBJECT` / `OMC_MESSAGE` to bypass the LLM and write the commit text yo
 <td width="50%" valign="top">
 
 ### 🛡️ Always degrades, never blocks
-No repo → clear error. No Ollama → try the OpenAI-compatible fallback → `update`. No key → unsigned. No network for the tag pull → warn and bump from local state. Failed push → commit and tag stay local, never rolled back. It never leaves a task half-done over infrastructure.
+No repo → clear error. No Ollama → try the OpenAI-compatible fallback → `update`. No key → unsigned. No network for the tag pull → warn and bump from local state. Failed push → commit and tag stay local, never rolled back. Untouched yubikey → after `OMC_TOUCH_TIMEOUT` the commit falls back to unsigned. It never leaves a task half-done over infrastructure.
 
 </td>
 </tr>
@@ -97,7 +97,7 @@ No repo → clear error. No Ollama → try the OpenAI-compatible fallback → `u
 <td width="50%" valign="top">
 
 ### 🚀 Optional push
-Set `OMC_PUSH_KEY_PATH` to an SSH key and `omc` pushes the new commit and its tag to the default remote after tagging — `git push; git push --tags`, all in-process via go-git. When the working tree is clean, the push still runs so tags left behind by a previously failed push get published. The push key also accepts a **FIDO2 security-key handle**: auth goes through the ssh-agent and your smartcard, with the same animated touch countdown.
+Set `OMC_PUSH_KEY_PATH` to an SSH key and `omc` pushes the new commit and its tag to the default remote after tagging — `git push; git push --tags`, all in-process via go-git. When the working tree is clean, the push still runs so tags left behind by a previously failed push get published. The push key also accepts a **FIDO2 security-key handle**: auth goes through the ssh-agent and your smartcard, with the same touch prompt, desktop notification, and timeout as every other smartcard wait.
 
 </td>
 <td width="50%" valign="top">
@@ -216,13 +216,25 @@ $ omc
 14:18:31 └─ └─ ✅ OK omc 🏷️ tag tagged tag=v0.0.1 hash=3f8bc54 signed=true
 ```
 
-### 2. Smartcard (FIDO2) signing key — touch countdown
+### 2. Smartcard (FIDO2) signing key — prompted, notified, bounded
 
 With `OMC_SIGN_KEY_PATH` pointing at an `id_ed25519_sk` handle, omc signs
-through the ssh-agent. On a TTY a live countdown animates while the signature
-waits for the device touch, and the moment the operation returns the
-countdown is replaced by a timestamped "touch confirmed, thank you" line
-inside the tree plus a structured record naming what can now proceed:
+through the ssh-agent. Every signature that blocks on the smartcard — the
+commit signing, the tag signing, the upstream tag pull, the push — is a
+*touch wait*, and every touch wait gets the full treatment:
+
+- a structured record announces the wait before the signature blocks, so a
+  pending touch is always greppable in captured logs;
+- on a TTY an animated countdown replaces the spinner and a terminal bell
+  rings;
+- after a few seconds without a touch, a desktop notification pops up
+  ("omc: security key touch required") through the freedesktop
+  `org.freedesktop.Notifications` D-Bus interface — GNOME, KDE, XFCE, … —
+  detected at runtime, pure Go, no `notify-send` binary. `OMC_TOUCH_NOTIFY=off`
+  disables it;
+- the wait is **bounded** by `OMC_TOUCH_TIMEOUT` (default 60s, `0` = forever,
+  like OpenSSH): on timeout omc degrades exactly like for any unusable key —
+  warn, commit unsigned, skip signing the tag — instead of hanging forever.
 
 ```console
 $ ssh-add ~/.ssh/id_ed25519_sk
@@ -231,24 +243,34 @@ $ omc
 ...
 14:22:09   🔑 signing key
 14:22:09 ┌─ ⚠️ WARN omc warning: ssh key ~/.ssh/id_ed25519_sk is a smartcard security key; signing via the ssh-agent
-14:22:09 ├─ ℹ️ INFO omc ✍️ sign signing commit with ssh-agent security key key=~/.ssh/id_ed25519_sk mode=smartcard algo=sk-ssh-ed25519@openssh.com
-14:22:09 ├─ ℹ️ INFO omc 🔐 touch security key detected: touch your smartcard/yubikey when it blinks to authorise the commit signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the commit signing
+14:22:09 └─ ℹ️ INFO omc ✍️ sign signing commit with ssh-agent security key key=~/.ssh/id_ed25519_sk mode=smartcard algo=sk-ssh-ed25519@openssh.com
 14:22:09   📦 committing & publishing
 14:22:09 ┌─   📝 commit
-14:22:09 ┌─ ┌─ ℹ️ INFO omc 🔐 touch security key detected: touch your smartcard/yubikey when it blinks to authorise the commit signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the commit signing
-🔑 TOUCH YOUR SECURITY KEY  ▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:21
-14:22:14 ┌─ └─ 💛 touch confirmed, thank you!
-14:22:14 ├─ ┌─ ✅ OK omc 🔐 touch touch confirmed, thank you now=proceeding with the commit signing key=~/.ssh/id_ed25519_sk
-14:22:14 ├─ └─ ✅ OK omc 📝 commit committed hash=5c91e2a signed=true
-14:22:14 ├─   🏷️ tag
-14:22:14 ├─ ┌─ ℹ️ INFO omc 🔐 touch security key detected: touch your smartcard/yubikey when it blinks to authorise the tag signing key=~/.ssh/id_ed25519_sk mode=smartcard action=the tag signing
-🔑 TOUCH YOUR SECURITY KEY  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:29
-14:22:18 ├─ └─ 💛 touch confirmed, thank you!
-14:22:18 ├─ ┌─ ✅ OK omc 🔐 touch touch confirmed, thank you now=proceeding with the tag signing key=~/.ssh/id_ed25519_sk
-14:22:18 └─ └─ ✅ OK omc 🏷️ tag tagged tag=v0.0.2 hash=5c91e2a signed=true
+14:22:09 ├─ ┌─ ℹ️ INFO omc 🔐 touch waiting for security key touch, touch your smartcard/yubikey when it blinks key=~/.ssh/id_ed25519_sk algo=sk-ssh-ed25519@openssh.com action=the commit signing timeout=1m0s
+🔑 TOUCH YOUR SECURITY KEY  ▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:58
+14:22:11 ├─ └─ 💛 touch confirmed, thank you!
+14:22:11 ├─ ┌─ ✅ OK omc 🔐 touch touch confirmed, thank you elapsed=2s key=~/.ssh/id_ed25519_sk algo=sk-ssh-ed25519@openssh.com action=the commit signing outcome=confirmed
+14:22:11 ├─ └─ ✅ OK omc 📝 commit committed hash=5c91e2a signed=true
+14:22:11 ├─   🏷️ tag
+14:22:11 ├─ ┌─ ℹ️ INFO omc 🔐 touch waiting for security key touch, touch your smartcard/yubikey when it blinks key=~/.ssh/id_ed25519_sk algo=sk-ssh-ed25519@openssh.com action=the tag signing timeout=1m0s
+🔑 TOUCH YOUR SECURITY KEY  ▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱  ⏱ 0:59
+14:22:13 ├─ └─ 💛 touch confirmed, thank you!
+14:22:13 ├─ ┌─ ✅ OK omc 🔐 touch touch confirmed, thank you elapsed=2s key=~/.ssh/id_ed25519_sk algo=sk-ssh-ed25519@openssh.com action=the tag signing outcome=confirmed
+14:22:13 └─ └─ ✅ OK omc 🏷️ tag tagged tag=v0.0.2 hash=5c91e2a signed=true
 ```
 
-When the agent has no matching identity, omc degrades — never blocks:
+No touch within the budget? Degrade, never block:
+
+```console
+14:24:02 ├─ ┌─ ℹ️ INFO omc 🔐 touch waiting for security key touch, touch your smartcard/yubikey when it blinks key=~/.ssh/id_ed25519_sk action=the commit signing timeout=1m0s
+🔑 TOUCH YOUR SECURITY KEY  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰  ⏱ 0:00
+14:25:02 ├─ └─ ⏰ touch timed out, waiting for security key
+14:25:02 ├─ ├─ ⚠️ WARN omc 🔐 touch touch timed out waiting for security key elapsed=1m0s key=~/.ssh/id_ed25519_sk action=the commit signing outcome=timeout timeout=1m0s
+14:25:02 ├─ ┌─ ⚠️ WARN omc warning: commit signing timed out waiting for the security key touch; committing unsigned
+14:25:02 ├─ └─ ✅ OK omc 📝 commit committed hash=3d99a1b signed=false
+```
+
+When the agent has no matching identity, omc degrades the same way:
 
 ```console
 14:23:55 ⚠️ WARN omc warning: ssh key ~/.ssh/id_ed25519_sk is a smartcard security key, but no ssh-agent identity matches
@@ -480,6 +502,8 @@ omc
 | `OMC_MESSAGE` | Override the commit body. When set, **no LLM generation runs**. See [Message & tag overrides](#-message--tag-overrides). |
 | `OMC_TAG` | Override the tag name. Used only when it is strict semver `vMAJOR.MINOR.PATCH`; otherwise the auto-bump runs. See [Message & tag overrides](#-message--tag-overrides). |
 | `OMC_PUSH_KEY_PATH` | Path to an SSH **private** key. When set and readable, pushes the new commit and tags to the default remote after tagging (`git push; git push --tags`). Also used to authenticate the pre-tag **upstream tag pull**. A **FIDO2 security-key handle** is supported (auth via ssh-agent + smartcard). If set but unusable, or the push fails, warns and leaves the commit/tag local. |
+| `OMC_TOUCH_TIMEOUT` | Seconds to wait for a FIDO2 security-key (yubikey) touch before degrading. Every smartcard wait — commit signing, tag signing, upstream tag pull, push — is bounded by it. Default `60`; `0` waits forever (OpenSSH behavior). On timeout: commit unsigned, tag/pull/push warn and continue. |
+| `OMC_TOUCH_NOTIFY` | Desktop notifications while a touch is pending. `auto` (default) detects a freedesktop notification daemon via D-Bus at runtime (GNOME, KDE, XFCE, …); `on` skips the daemon probe; `off` disables. Pure Go, no `notify-send` binary; the notification appears after a few seconds without a touch, so quick touches stay quiet. |
 
 > [!WARNING]
 > **Signing:** only passphrase-less software keys are supported (there is no

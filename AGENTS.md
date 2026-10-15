@@ -39,7 +39,13 @@ developer contract.
   sign through the running ssh-agent (`golang.org/x/crypto/ssh/agent`),
   which talks to the smartcard; no agent required for ordinary software
   keys.
-- **Always degrade, never block.** If Ollama is unreachable or the LLM
+- **Always degrade, never block.** Every smartcard (FIDO2) touch wait is
+  bounded by `OMC_TOUCH_TIMEOUT` (default 60s, 0 = forever) and degrades on
+  timeout exactly like an unusable key: warn, commit unsigned, warn on
+  tag/pull/push. Touch prompts (records, TTY countdown, optional desktop
+  notification via D-Bus — `github.com/godbus/dbus/v5`, pure Go) attach to
+  the signature requests themselves, so the commit, the tag, the upstream
+  tag pull and the push all prompt identically. If Ollama is unreachable or the LLM
   call fails, fall back to the OpenAI-compatible endpoint
   (`OPENAPI_*`, with `OPENAPI_DESC_*` legacy aliases); if that is also unavailable or fails, fall back to
   `update`. If the key file is missing/invalid
@@ -63,14 +69,23 @@ internal/gitops/      PlainOpen, StageAll, StagedDiff, Commit, SignedCommit,
                       ResolveIdentity, Scout, index→tree writer,
                       LatestSemverTag, NextSemverTag, CreateTag, SignedTag,
                       ValidSemverTag, NormalizeTag, PullTags (upstream tag
-                      pull, git fetch --tags), PushToRemote
+                      pull, git fetch --tags), PushToRemote; both accept a
+                      sign.TouchConfig so their SSH auth is touch-bounded
 internal/sign/        sign.Load, sign.SecurityKeySigner, signer.Sign → armored SSH sig;
-                      FIDO2 detection & agent delegation (DetectKind, IsSecurityKeyPath, HandleMatches)
+                      FIDO2 detection & agent delegation (DetectKind, IsSecurityKeyPath, HandleMatches);
+                      WrapTouch wraps every agent signature with the touch
+                      prompt + enforced timeout (ErrTouchTimeout)
+internal/touch/       shared TouchEvent/TouchHook vocabulary for smartcard
+                      touch waits: sign produces the events, output consumes
+internal/notify/     runtime-detected desktop notifications over D-Bus
+                      (org.freedesktop.Notifications via godbus; pure Go)
 internal/llm/         shared commit-message prompts + Generator interface (all backends)
 internal/ollama/      Client.Available, DescribeDetail, SummarizeTLDR (implements llm.Generator)
 internal/openai/      OpenAI-compatible fallback: /chat/completions + /models (implements llm.Generator)
 internal/output/      UI: stdout = structured results, stderr = structured diagnostics;
-                      animated scramble spinner, touch countdown, nested log groups
+                      animated scramble spinner, touch prompts (records +
+                      countdown + deferred desktop notification; the UI
+                      implements touch.Hook), nested log groups
 internal/version/     Version string: hardwired semver, overridable via linker -X
 ```
 
@@ -91,6 +106,13 @@ consumers can grep regardless of TTY mode.
 Right after the repository is opened, a `repo` step emits a context
 diagnostic with `dir=` (worktree root), `latest_tag=`, and one
 `<remote>_url=` field per configured remote URL.
+
+Security-key touch waits emit their own `touch` step records: an INFO
+record when the wait starts (key=, algo=, action=, timeout=), an OK
+`touch confirmed` record on success (elapsed=, outcome=confirmed), and a
+WARN `touch timed out` record on timeout (outcome=timeout). The animated
+countdown, terminal bell, and the optional desktop notification are
+TTY/DE extras on top; the records are always emitted, TTY or not.
 
 ## Release / version stamping
 
@@ -120,7 +142,10 @@ default remote, authenticated with the push key on SSH remotes) so the
 bump can never collide with a tag that already exists upstream.
 If `OMC_TAG` is set and parses as strict semver, that name (normalized
 with a leading `v`) is used verbatim; otherwise the auto-bump path scans
-all `refs/tags/v*.*.*` refs and bumps the patch segment. When no prior
+all `refs/tags/v*.*.*` refs and bumps the patch segment. The pull itself is
+a smartcard touch wait when the push key is an FIDO2 handle on an SSH
+remote: prompted and bounded through the same touch policy as everything
+else, and a timeout still degrades (warn, local tag state). When no prior
 tag exists, the first tag is `v0.0.1`. The tag is annotated and
 SSH-signed with the same key used for the commit when a signer is
 available. If the tag step fails, `omc` logs a warning and exits 0; the
@@ -180,3 +205,7 @@ config. Config files are only consulted for the identity fallback.
    output (starting with the version banner), upstream tag pull before
    bumping, and auto semver tagging of the new commit (signed when a key
    is configured).
+7. Security-key touch policy honored everywhere: prompts fire from the
+   signature requests (commit, tag, pull, push), the wait is bounded by
+   `OMC_TOUCH_TIMEOUT`, a timeout degrades, and desktop notifications are
+   runtime-detected (`OMC_TOUCH_NOTIFY`) and never block the run.

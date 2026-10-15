@@ -16,6 +16,7 @@ import (
 	"paepcke.de/omc/internal/config"
 	"paepcke.de/omc/internal/gitops"
 	"paepcke.de/omc/internal/output"
+	"paepcke.de/omc/internal/sign"
 )
 
 // TestPushNothingPushesTags verifies the bug fix: when there is nothing to
@@ -89,7 +90,7 @@ func TestPushNothingPushesTags(t *testing.T) {
 	}
 	var out, errBuf bytes.Buffer
 	ui := output.New(&out, &errBuf)
-	pushNothing(ui, repo, config.Config{PushKeyPath: keyPath})
+	pushNothing(ui, repo, config.Config{PushKeyPath: keyPath}, sign.TouchConfig{})
 
 	// The branch must have been pushed to the remote.
 	gotBranch, err := bare.Storer.Reference(plumbing.NewBranchReferenceName("master"))
@@ -133,7 +134,7 @@ func TestPushNothingNoRemote(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "key"), []byte("unused"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pushNothing(ui, repo, config.Config{PushKeyPath: filepath.Join(dir, "key")})
+	pushNothing(ui, repo, config.Config{PushKeyPath: filepath.Join(dir, "key")}, sign.TouchConfig{})
 	if !strings.Contains(errBuf.String(), "push failed") {
 		t.Errorf("expected a degradation warning, got: %q", errBuf.String())
 	}

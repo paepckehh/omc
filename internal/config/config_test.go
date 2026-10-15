@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFromEnv(t *testing.T) {
@@ -137,5 +138,51 @@ func TestFromEnvOverridesEmpty(t *testing.T) {
 	c := FromEnv()
 	if c.Subject != "" || c.Message != "" || c.Tag != "" {
 		t.Errorf("expected empty overrides, got %+v", c)
+	}
+}
+
+func TestTouchEnvDefaults(t *testing.T) {
+	t.Setenv("OMC_TOUCH_TIMEOUT", "")
+	t.Setenv("OMC_TOUCH_NOTIFY", "")
+	c := FromEnv()
+	if c.TouchTimeout != DefaultTouchTimeout {
+		t.Errorf("TouchTimeout default = %v, want %v", c.TouchTimeout, DefaultTouchTimeout)
+	}
+	if c.TouchNotify != "" {
+		t.Errorf("TouchNotify default = %q, want empty", c.TouchNotify)
+	}
+}
+
+func TestTouchEnvOverrides(t *testing.T) {
+	t.Setenv("OMC_TOUCH_TIMEOUT", "30")
+	t.Setenv("OMC_TOUCH_NOTIFY", "off")
+	c := FromEnv()
+	if c.TouchTimeout != 30*time.Second {
+		t.Errorf("TouchTimeout = %v, want 30s", c.TouchTimeout)
+	}
+	if c.TouchNotify != "off" {
+		t.Errorf("TouchNotify = %q, want off", c.TouchNotify)
+	}
+}
+
+func TestTouchTimeoutParsing(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want time.Duration
+	}{
+		{"", DefaultTouchTimeout}, // unset -> default
+		{"30", 30 * time.Second},
+		{"0", 0},                      // explicit zero = wait forever
+		{"-5", 0},                     // negative clipped to wait forever
+		{"junk", DefaultTouchTimeout}, // unparsable -> default
+		{"2.5", DefaultTouchTimeout},  // fractional -> default (whole seconds only)
+	}
+	for _, c := range cases {
+		t.Run(c.raw, func(t *testing.T) {
+			t.Setenv("OMC_TOUCH_TIMEOUT", c.raw)
+			if got := FromEnv().TouchTimeout; got != c.want {
+				t.Errorf("OMC_TOUCH_TIMEOUT=%q -> %v, want %v", c.raw, got, c.want)
+			}
+		})
 	}
 }

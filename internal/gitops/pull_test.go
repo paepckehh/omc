@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"github.com/go-git/go-git/v5"
+
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"paepcke.de/omc/internal/sign"
 )
 
 // TestPullTagsAvoidsUpstreamCollision reproduces the tag collision bug and its
@@ -44,7 +46,7 @@ func TestPullTagsAvoidsUpstreamCollision(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := PushToRemote(seed, ""); err != nil {
+	if _, err := PushToRemote(seed, "", sign.TouchConfig{}); err != nil {
 		t.Fatalf("seed push: %v", err)
 	}
 
@@ -67,7 +69,7 @@ func TestPullTagsAvoidsUpstreamCollision(t *testing.T) {
 	}
 
 	// The fix: pull the upstream tag state before generating.
-	if err := PullTags(repo, ""); err != nil {
+	if err := PullTags(repo, "", sign.TouchConfig{}); err != nil {
 		t.Fatalf("PullTags: %v", err)
 	}
 
@@ -114,7 +116,7 @@ func TestPullTagsAvoidsUpstreamCollision(t *testing.T) {
 // repository without a remote has nothing to pull; that is not a failure.
 func TestPullTagsNoRemoteIsSuccess(t *testing.T) {
 	repo, _, _ := initTestRepo(t)
-	if err := PullTags(repo, ""); err != nil {
+	if err := PullTags(repo, "", sign.TouchConfig{}); err != nil {
 		t.Fatalf("PullTags without remote = %v, want nil", err)
 	}
 }
@@ -130,10 +132,10 @@ func TestPullTagsAlreadyUpToDate(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := PullTags(repo, ""); err != nil {
+	if err := PullTags(repo, "", sign.TouchConfig{}); err != nil {
 		t.Fatalf("first pull: %v", err)
 	}
-	if err := PullTags(repo, ""); err != nil {
+	if err := PullTags(repo, "", sign.TouchConfig{}); err != nil {
 		t.Fatalf("second pull should be up to date, got: %v", err)
 	}
 }

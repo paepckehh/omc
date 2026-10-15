@@ -10,13 +10,19 @@
 // handle. Signing those requires the agent to forward the challenge to the
 // authenticator (which enforces the touch/pin check). Everything stays pure
 // Go; no external binaries are invoked.
+//
+// The agent signature request blocks until the smartcard observes a touch,
+// which OpenSSH and libfido2 wait for indefinitely. To keep omc responsive,
+// every agent-backed signature is wrapped by WrapTouch: the wait notifies a
+// touch.Hook (structured records, countdown, desktop notification) and a
+// configurable deadline fails the signature with ErrTouchTimeout instead of
+// hanging, matching omc's "always degrade, never block" contract.
 package sign
 
 import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -170,10 +176,13 @@ func Load(path string) (*Signer, error) {
 // mirroring how git resolves a security-key signing key. Every signature is
 // delegated to the agent, which forwards the challenge to the smartcard;
 // the user-presence (touch) check is enforced by the authenticator, not by
-// omc. It returns an error when the agent is unreachable or does not hold
-// the identity (e.g. the key was never ssh-add'ed); callers degrade to a
-// warning exactly like for an unusable key file.
-func SecurityKeySigner(keyPath string) (*Signer, error) {
+// omc. touch configures the wait around each agent signature: the hook is
+// notified while the smartcard waits for the user, and a positive timeout
+// bounds the wait (zero waits forever, like OpenSSH). It returns an error
+// when the agent is unreachable or does not hold the identity (e.g. the key
+// was never ssh-add'ed); callers degrade to a warning exactly like for an
+// unusable key file.
+func SecurityKeySigner(keyPath string, touchCfg TouchConfig) (*Signer, error) {
 	conn, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK"))
 	if err != nil {
 		return nil, fmt.Errorf("connect to ssh-agent for security key %s (is ssh-agent running?): %w", keyPath, err)
@@ -197,7 +206,11 @@ func SecurityKeySigner(keyPath string) (*Signer, error) {
 		return nil, fmt.Errorf("ssh-agent does not hold security key %s (add it with: ssh-add %s)", filepath.Base(keyPath), keyPath)
 	}
 
-	return &Signer{signer: &agentSigner{signer: found}, pseudoKeyType: skTypeOf(found)}, nil
+	touchCfg.KeyPath = keyPath
+	if touchCfg.Algorithm == "" {
+		touchCfg.Algorithm = skTypeOf(found)
+	}
+	return &Signer{signer: WrapTouch(found, touchCfg), pseudoKeyType: skTypeOf(found)}, nil
 }
 
 // skTypeOf returns the sk-* algorithm an agent-backed security-key signer
@@ -216,23 +229,6 @@ func skTypeOf(s ssh.Signer) string {
 	}
 	return ""
 }
-
-// agentSigner is an ssh.Signer that forwards Sign calls to an agent-held
-// identity. The agent connection stays alive through the underlying
-// agent-backed signer (it references the agent client, which references the
-// connection); it is deliberately never closed here, the short-lived CLI
-// exits right after signing and the OS cleans up.
-type agentSigner struct {
-	signer ssh.Signer
-}
-
-func (s *agentSigner) PublicKey() ssh.PublicKey { return s.signer.PublicKey() }
-
-func (s *agentSigner) Sign(rand io.Reader, data []byte) (*ssh.Signature, error) {
-	return s.signer.Sign(rand, data)
-}
-
-var _ ssh.Signer = (*agentSigner)(nil)
 
 // HandleMatches reports whether the given public key corresponds to the
 // security-key handle stored at keyPath. It parses path (falling back to
@@ -268,6 +264,17 @@ func (s *Signer) Sign(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("ssh sign: %w", err)
 	}
 	return sshsig.Armor(sig), nil
+}
+
+// SignAs signs like Sign but labels the touch wait with the given action
+// (e.g. "the tag signing") so prompts and log records name the operation
+// that is waiting for the smartcard. Signers that are not agent-backed
+// security keys ignore the label.
+func (s *Signer) SignAs(action string, data []byte) ([]byte, error) {
+	if ts, ok := s.signer.(*touchSigner); ok {
+		ts.setAction(action)
+	}
+	return s.Sign(data)
 }
 
 // PublicAlgorithm returns the SSH signature algorithm this signer uses

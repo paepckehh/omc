@@ -754,13 +754,18 @@ func defaultRemoteConfig(repo *git.Repository) (*config.RemoteConfig, error) {
 // authentication; when empty, go-git falls back to its default auth (SSH
 // agent). For file:// or https URLs the key is not applicable.
 //
+// touch configures the smartcard touch wait when keyPath names a FIDO2
+// security-key handle: the SSH user-authentication signature goes through
+// the ssh-agent to the device, and the wait is prompted and bounded like
+// every other touch in omc (zero value: no prompt, no timeout).
+//
 // NoErrAlreadyUpToDate is treated as success (nothing to push). An
 // up-to-date branch does not stop the tag pass: pending local tags (a
 // previous run whose tag push failed) are exactly what the tag pass is
 // there to publish.
 // ErrForceNeeded / non-fast-forward errors from the tag pass are returned
 // as errors; the branch push itself already succeeded at that point.
-func PushToRemote(repo *git.Repository, keyPath string) (PushResult, error) {
+func PushToRemote(repo *git.Repository, keyPath string, touchCfg sign.TouchConfig) (PushResult, error) {
 	// Prefer "origin", like git; otherwise the lexicographically first
 	// remote that has URLs (see defaultRemoteConfig).
 	remoteCfg, err := defaultRemoteConfig(repo)
@@ -775,7 +780,7 @@ func PushToRemote(repo *git.Repository, keyPath string) (PushResult, error) {
 		branch = ref.Name().Short()
 	}
 
-	auth, err := getSSHAuth(keyPath, remoteCfg.URLs)
+	auth, err := getSSHAuth(keyPath, remoteCfg.URLs, touchCfg)
 	if err != nil {
 		return PushResult{}, err
 	}
@@ -825,14 +830,15 @@ func pushOnce(repo *git.Repository, cfg *config.RemoteConfig, opts *git.PushOpti
 // have are never pruned; a local tag that diverged from a same-named remote
 // tag follows the remote (the local tag object itself stays in the object
 // database). keyPath is the optional SSH private key used for
-// authentication, exactly like PushToRemote; for file:// or https URLs it is
-// not applicable.
+// authentication, exactly like PushToRemote, and touch configures the
+// smartcard touch wait for it the same way; for file:// or https URLs they
+// are not applicable.
 //
 // A repository without a usable remote has nothing to pull; that is success,
 // not a failure (the caller is refreshing best-effort tag state). Any other
 // error is real: NoErrAlreadyUpToDate (a remote without tags) is success.
 // Callers degrade: a failed pull is a warning, never a block.
-func PullTags(repo *git.Repository, keyPath string) error {
+func PullTags(repo *git.Repository, keyPath string, touchCfg sign.TouchConfig) error {
 	r, err := defaultRemoteConfig(repo)
 	if errors.Is(err, ErrNoRemoteConfigured) {
 		return nil
@@ -840,7 +846,7 @@ func PullTags(repo *git.Repository, keyPath string) error {
 	if err != nil {
 		return err
 	}
-	auth, err := getSSHAuth(keyPath, r.URLs)
+	auth, err := getSSHAuth(keyPath, r.URLs, touchCfg)
 	if err != nil {
 		return err
 	}
@@ -859,7 +865,9 @@ func PullTags(repo *git.Repository, keyPath string) error {
 // listing the remote's configured URLs. Only usable together with an SSH
 // remote URL. For non-SSH remotes and empty key paths it returns a nil
 // transport.AuthMethod, which makes go-git fall back to its default auth
-// (SSH agent for ssh URLs, no auth for https/file URLs).
+// (SSH agent for ssh URLs, no auth for https/file URLs). touch configures
+// the smartcard touch wait for security-key authentication; see
+// securityKeyAuth.
 //
 // The server host key is verified against ~/.ssh/known_hosts and
 // /etc/ssh/ssh_known_hosts (plus SSH_KNOWN_HOSTS), exactly like git. On top
@@ -873,7 +881,7 @@ func PullTags(repo *git.Repository, keyPath string) error {
 // algorithm list from known_hosts itself) succeeds. A host that is not in
 // known_hosts at all still fails with a warning rather than silently
 // trusting an unknown server.
-func getSSHAuth(keyPath string, remoteURLs []string) (transport.AuthMethod, error) {
+func getSSHAuth(keyPath string, remoteURLs []string, touchCfg sign.TouchConfig) (transport.AuthMethod, error) {
 	if len(remoteURLs) == 0 {
 		return nil, nil
 	}
@@ -912,7 +920,7 @@ func getSSHAuth(keyPath string, remoteURLs []string) (transport.AuthMethod, erro
 		// disk is just a handle to the agent-held key, so the key path
 		// selects which agent identity to offer and the signature is
 		// delegated to the agent.
-		a, err := securityKeyAuth(user, keyPath)
+		a, err := securityKeyAuth(user, keyPath, touchCfg)
 		if err != nil {
 			return nil, err
 		}
@@ -995,7 +1003,18 @@ func applyKnownHosts(auth transport.AuthMethod, hostWithPort string) error {
 // the agent then talks to the smartcard, which enforces the user-presence
 // (touch) check. Requires an ssh-agent; otherwise an error surfaces and the
 // caller degrades exactly like for an unusable key file.
-func securityKeyAuth(user, keyPath string) (transport.AuthMethod, error) {
+//
+// When touch is active (a hook and/or a timeout is configured) every offered
+// signer is wrapped by sign.WrapTouch, so the SSH user-authentication
+// signature is prompted and bounded exactly like the commit and tag
+// signatures: this is what makes the upstream tag pull and the push ask for
+// the yubikey touch with a countdown, a notification, and a deadline.
+// Every offered signer is wrapped (not just the matching one) because the
+// ssh-agent may present a security-key identity under its plain underlying
+// type, so which of the offered identities needs the touch cannot be told
+// up front; signers that do not need a touch answer instantly and the
+// prompt clears with them.
+func securityKeyAuth(user, keyPath string, touchCfg sign.TouchConfig) (transport.AuthMethod, error) {
 	conn, err := net.Dial("unix", os.Getenv("SSH_AUTH_SOCK"))
 	if err != nil {
 		return nil, fmt.Errorf("connect to ssh-agent for security key %s: %w", keyPath, err)
@@ -1015,15 +1034,26 @@ func securityKeyAuth(user, keyPath string) (transport.AuthMethod, error) {
 	}
 
 	cb := func() ([]ssh.Signer, error) {
-		if len(matching) == 0 {
+		offered := matching
+		if len(offered) == 0 {
 			// Key handle selected, but the agent does not hold it.
 			// Fall back to offering everything the agent knows, so a
 			// user who set OMC_PUSH_KEY_PATH once is not punished
 			// when the sk path only selects a name; the agent still
 			// picks the right identity per server.
-			return signers, nil
+			offered = signers
 		}
-		return matching, nil
+		if !touchCfg.Active() {
+			return offered, nil
+		}
+		wrapped := make([]ssh.Signer, len(offered))
+		for i, s := range offered {
+			cfg := touchCfg
+			cfg.KeyPath = keyPath
+			cfg.Algorithm = ""
+			wrapped[i] = sign.WrapTouch(s, cfg)
+		}
+		return wrapped, nil
 	}
 
 	auth := &sshpkg.PublicKeysCallback{

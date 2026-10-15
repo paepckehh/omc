@@ -45,6 +45,18 @@
 //	                   authenticate through the ssh-agent.
 //	                   If set but unusable, the push is skipped with a
 //	                   warning; the commit and tag are never rolled back.
+//	OMC_TOUCH_TIMEOUT  seconds to wait for a FIDO2 security-key (yubikey)
+//	                   touch before degrading: every smartcard wait —
+//	                   commit signing, tag signing, the upstream tag pull,
+//	                   the push — is bounded by it; on timeout omc warns
+//	                   and continues (commit unsigned, tag/pull/push
+//	                   skipped or local). Default 60; 0 waits forever,
+//	                   matching OpenSSH's own unbounded wait.
+//	OMC_TOUCH_NOTIFY   desktop notifications while a touch is pending:
+//	                   "auto" (default; a freedesktop notification daemon
+//	                   is detected via D-Bus at runtime — GNOME, KDE,
+//	                   XFCE, ...), "on" (skip the probe), or "off".
+//	                   Pure Go over D-Bus, no notify-send binary.
 //
 // omc runs inside a git repository and performs the equivalent of
 //
@@ -63,6 +75,7 @@ import (
 	"paepcke.de/omc/internal/config"
 	"paepcke.de/omc/internal/gitops"
 	"paepcke.de/omc/internal/llm"
+	"paepcke.de/omc/internal/notify"
 	"paepcke.de/omc/internal/ollama"
 	"paepcke.de/omc/internal/openai"
 	"paepcke.de/omc/internal/output"
@@ -80,6 +93,26 @@ func run() int {
 	ui.Startup(version.Version)
 	cfg := config.FromEnv()
 	ui.ConfigNotice(configReport(cfg))
+	// Runtime-detected desktop notifications for touch prompts: pure Go
+	// over the D-Bus org.freedesktop.Notifications interface (GNOME, KDE,
+	// XFCE, ...), never an external binary. Best-effort: nil when no
+	// session bus or notification daemon is reachable, and every call is
+	// bounded so a hung daemon cannot stall the run.
+	if notifier := notify.Detect(cfg.TouchNotify); notifier != nil {
+		ui.SetNotifier(notifier)
+		if sign.IsSecurityKeyPath(cfg.KeyPath) || sign.IsSecurityKeyPath(cfg.PushKeyPath) {
+			ui.Info("desktop notifications available for security-key touch prompts (%s)", notifier.Describe())
+		}
+	}
+
+	// The touch policy for every smartcard-bound operation in this run:
+	// structured records, an animated countdown, an optional desktop
+	// notification, and a hard timeout. It is threaded into every signer
+	// that can block on a FIDO2 touch — the commit and tag signatures and
+	// the SSH authentications of the upstream tag pull and the push — so
+	// wherever the smartcard waits, the user is prompted and the wait is
+	// bounded (OMC_TOUCH_TIMEOUT; zero waits forever like OpenSSH).
+	touchCfg := sign.TouchConfig{Timeout: cfg.TouchTimeout, Hook: ui}
 
 	// 1. Find the repository we are inside of.
 	var (
@@ -142,7 +175,7 @@ func run() int {
 	// the remote), and exit cleanly.
 	if strings.TrimSpace(diffText) == "" {
 		ui.CleanTree()
-		pushNothing(ui, repo, cfg)
+		pushNothing(ui, repo, cfg, touchCfg)
 		return 0
 	}
 
@@ -188,16 +221,16 @@ func run() int {
 
 	// 5. Sign the commit with the configured SSH key (opt-in). The signer
 	// resolution is its own logical group: the key-load step, the resolved
-	// algorithm notice (loadSigner emits it), and the smartcard touch
-	// notice belong together under one header.
+	// algorithm notice (loadSigner emits it), and the smartcard mode
+	// notice belong together under one header. The touch prompt itself
+	// fires later, from the actual agent signature (see touchCfg).
 	var signer *sign.Signer
 	skMode := false
 	if cfg.KeyPath != "" {
-		ui.BeginGroup("🔑 signing key", 3)
-		signer, skMode = loadSigner(ui, cfg)
+		ui.BeginGroup("🔑 signing key", 2)
+		signer, skMode = loadSigner(ui, cfg, touchCfg)
 		if skMode && signer != nil {
 			ui.SecurityKeyModeNotice(cfg.KeyPath, signer.PublicAlgorithm())
-			ui.SecurityKeyTouchNotice(cfg.KeyPath, "the commit signing")
 		}
 		ui.EndGroup()
 	}
@@ -207,10 +240,6 @@ func run() int {
 	// Loader warnings already explain the details; the notice line states
 	// the final mode so the record is unambiguous.
 	id := gitops.ResolveIdentity(repo)
-	var (
-		commitStep func(step, msg string, fn func() error) error = ui.Step
-		tagStep    func(step, msg string, fn func() error) error = ui.Step
-	)
 	skCommit := skMode && signer != nil
 
 	// 6. Create the commit, signing it when a key is available. The commit,
@@ -222,41 +251,56 @@ func run() int {
 	// sub-group budgets (all computed upfront). Each sub-group closes
 	// itself once its budget is exhausted, so no per-phase EndGroup is
 	// needed; the last phase's closing line renders └─ for every level.
+	//
+	// The smartcard touch prompts are no longer step wrappers: they fire
+	// from the signature requests themselves (see touchCfg), so the
+	// budgets count one begin/end record pair per expected touch — the
+	// commit signing (skCommit), the tag signing (skCommit), the upstream
+	// tag pull (sk push key over SSH), and the push (sk push key). Rare
+	// degrade paths (timeouts, pull warnings) may emit extra lines; the
+	// affected group then closes early and the rest renders flat, still
+	// structured and greppable.
 	commitLines := 2 // step OK + commit result
 	if skCommit {
-		commitLines = 3 // touch confirmed + step OK + commit result
+		commitLines = 4 // touch wait + touch confirmed + step OK + result
 	} else if cfg.KeyPath == "" {
 		commitLines = 3 // unsigned notice + step OK + commit result
 	}
 	tagLines := 2 // step OK + tag result (an OMC_TAG warning shifts these)
 	if skCommit {
-		tagLines += 2 // touch notice + touch confirmed
+		tagLines += 2 // tag signing touch pair
+	}
+	if sign.IsSecurityKeyPath(cfg.PushKeyPath) {
+		tagLines += 2 // upstream tag pull touch pair
 	}
 	pushLines := 0
 	if cfg.PushKeyPath != "" {
 		pushLines = 1 // step completion (OK or FAIL); a failure WARN degrades flat
 		if sign.IsSecurityKeyPath(cfg.PushKeyPath) {
-			pushLines = 3 // touch notice + touch confirmed + step completion
+			pushLines = 3 // push touch pair + step completion
 		}
 	}
 	ui.BeginGroup("📦 committing & publishing", commitLines+tagLines+pushLines)
 
-	// 6a. Commit phase: the commit step and its result form a nested group
-	// under "committing & publishing". The smartcard path wraps the step in
-	// the touch countdown; the notices that announce the smartcard mode
-	// were already emitted inside the "signing key" group above.
+	// 6a. Commit phase. A commit signing that times out waiting for the
+	// security-key touch degrades exactly like any unusable key: warn and
+	// create the commit unsigned. The signer is dropped for the rest of
+	// the run so the tag phase does not wait for a second touch; the push
+	// (which authenticates through its own path) still gets its own,
+	// bounded touch window.
 	ui.BeginGroup("📝 commit", commitLines)
-	if skCommit {
-		commitStep = func(step, msg string, fn func() error) error {
-			return ui.StepTouch(cfg.KeyPath, "the commit signing", signer.PublicAlgorithm(), step, msg, fn)
-		}
-	} else if cfg.KeyPath == "" {
+	if cfg.KeyPath == "" {
 		// No key configured at all: announce the unsigned path here (the
 		// configured-but-broken degrade case is already covered by the
 		// signer group's warnings above).
 		ui.SigningNotice("", false)
 	}
-	hash, commitErr := commitRoutine(commitStep, repo, msg, signer, commitLabel(id, signer != nil))
+	hash, commitErr := commitRoutine(ui, repo, msg, signer, commitLabel(id, signer != nil))
+	if commitErr != nil && signer != nil && errors.Is(commitErr, sign.ErrTouchTimeout) {
+		ui.Warn("commit signing timed out waiting for the security key touch; committing unsigned")
+		signer = nil
+		hash, commitErr = commitRoutine(ui, repo, msg, nil, commitLabel(id, false))
+	}
 	if commitErr != nil {
 		ui.EndGroup()
 		ui.EndGroup()
@@ -274,22 +318,17 @@ func run() int {
 	}
 
 	var tagName string
-	if skCommit {
-		tagStep = func(step, msg string, fn func() error) error {
-			return ui.StepTouch(cfg.KeyPath, "the tag signing", signer.PublicAlgorithm(), step, msg, fn)
-		}
-	}
 	ui.BeginGroup("🏷️ tag", tagLines)
-	if skCommit {
-		ui.SecurityKeyTouchNotice(cfg.KeyPath, "the tag signing")
-	}
-	tagErr := tagStep("tag", tagStepLabel(cfg), func() error {
+	tagErr := ui.Step("tag", tagStepLabel(cfg), func() error {
 		// Pull the upstream tag state first ("git fetch --tags") so the
 		// generated name cannot collide with a tag that already exists on
 		// the remote: a bump that happens to match an upstream tag would
 		// otherwise be force-pushed over it. Best-effort: a failed pull
-		// warns and the tag state stays local.
-		if err := gitops.PullTags(repo, cfg.PushKeyPath); err != nil {
+		// warns and the tag state stays local. When the push key is a
+		// FIDO2 handle on an SSH remote this fetch authenticates through
+		// the ssh-agent and needs a touch, prompted and bounded through
+		// touchCfg exactly like every other smartcard wait.
+		if err := gitops.PullTags(repo, cfg.PushKeyPath, touchCfg.For("the upstream tag pull")); err != nil {
 			ui.Warn("pull upstream tags failed (%v); local tag state may be behind the remote", err)
 		}
 		name, skipped, terr := resolveTagName(repo, cfg)
@@ -302,7 +341,7 @@ func run() int {
 		tagName = name
 		if signer != nil {
 			_, terr = gitops.SignedTag(repo, hash, tagName, tagSubject, id, func(payload []byte) ([]byte, error) {
-				return signer.Sign(payload)
+				return signer.SignAs("the tag signing", payload)
 			})
 			return terr
 		}
@@ -321,23 +360,14 @@ func run() int {
 	// readable, push the new commit and the new tag to the default remote
 	// ("git push; git push --tags"). All in-process via go-git. Failures
 	// degrade: the commit and tag are never rolled back over a push
-	// problem, matching the "always degrade, never block" contract.
+	// problem, matching the "always degrade, never block" contract. With
+	// an FIDO2 push key the SSH authentication signs through the
+	// ssh-agent, so the push waits for a touch too — prompted and bounded
+	// through touchCfg like every other smartcard wait.
 	if cfg.PushKeyPath != "" {
-		skPush := sign.IsSecurityKeyPath(cfg.PushKeyPath)
 		ui.BeginGroup("🚀 push", pushLines)
-		pushStep := ui.Step
-		if skPush {
-			var pushAlgo string
-			if signer != nil {
-				pushAlgo = signer.PublicAlgorithm()
-			}
-			ui.SecurityKeyTouchNotice(cfg.PushKeyPath, "the push")
-			pushStep = func(step, msg string, fn func() error) error {
-				return ui.StepTouch(cfg.PushKeyPath, "the push", pushAlgo, step, msg, fn)
-			}
-		}
-		if err := pushStep("push", "pushing commit and tags to remote", func() error {
-			_, err := gitops.PushToRemote(repo, cfg.PushKeyPath)
+		if err := ui.Step("push", "pushing commit and tags to remote", func() error {
+			_, err := gitops.PushToRemote(repo, cfg.PushKeyPath, touchCfg.For("the push"))
 			return err
 		}); err != nil {
 			ui.Warn("push failed (%v); commit and tag left local", err)
@@ -350,13 +380,15 @@ func run() int {
 }
 
 // commitRoutine runs the commit step + the structured result for the
-// resolved message and signer.
-func commitRoutine(stepFn func(step, msg string, fn func() error) error, repo *git.Repository, msg gitops.CommitMessage, signer *sign.Signer, lbl string) (plumbing.Hash, error) {
+// resolved message and signer. With a signer present the commit is
+// SSH-signed; the smartcard touch prompt (if any) fires from the agent
+// signature itself, so no step wrapper is needed here.
+func commitRoutine(ui *output.UI, repo *git.Repository, msg gitops.CommitMessage, signer *sign.Signer, lbl string) (plumbing.Hash, error) {
 	var hash plumbing.Hash
-	err := stepFn("commit", lbl, func() error {
+	err := ui.Step("commit", lbl, func() error {
 		if signer != nil {
 			h, err := gitops.SignedCommit(repo, msg, func(payload []byte) ([]byte, error) {
-				return signer.Sign(payload)
+				return signer.SignAs("the commit signing", payload)
 			})
 			hash = h
 			return err
@@ -396,6 +428,8 @@ func configReport(cfg config.Config) (detected, verified []output.Field) {
 	set("OMC_MESSAGE", cfg.Message)
 	set("OMC_TAG", cfg.Tag)
 	set("OMC_PUSH_KEY_PATH", cfg.PushKeyPath)
+	set("OMC_TOUCH_TIMEOUT", os.Getenv("OMC_TOUCH_TIMEOUT"))
+	set("OMC_TOUCH_NOTIFY", os.Getenv("OMC_TOUCH_NOTIFY"))
 
 	if cfg.KeyPath != "" {
 		verified = append(verified, output.F("sign_key", fmt.Sprintf("valid=%v", sign.DetectKind(cfg.KeyPath) != sign.KindBroken)))
@@ -432,21 +466,16 @@ func oneLine(s string) string {
 // tag. This covers the case where only local tags are ahead of the remote
 // (a previous run already committed and tagged locally, and the push that
 // was supposed to publish them failed or was skipped). All failures
-// degrade exactly like the main push step: warn and exit 0.
-func pushNothing(ui *output.UI, repo *git.Repository, cfg config.Config) {
+// degrade exactly like the main push step: warn and exit 0. touch threads
+// the smartcard touch prompt/timeout through the SSH authentication.
+func pushNothing(ui *output.UI, repo *git.Repository, cfg config.Config, touchCfg sign.TouchConfig) {
 	if cfg.PushKeyPath == "" {
 		return
 	}
-	pushStep := ui.Step
-	if sign.IsSecurityKeyPath(cfg.PushKeyPath) {
-		pushStep = func(step, msg string, fn func() error) error {
-			return ui.StepTouch(cfg.PushKeyPath, "the push", "", step, msg, fn)
-		}
-	}
 	var res gitops.PushResult
-	err := pushStep("push", "pushing commit and tags to remote", func() error {
+	err := ui.Step("push", "pushing commit and tags to remote", func() error {
 		var perr error
-		res, perr = gitops.PushToRemote(repo, cfg.PushKeyPath)
+		res, perr = gitops.PushToRemote(repo, cfg.PushKeyPath, touchCfg.For("the push"))
 		return perr
 	})
 	if err != nil {
@@ -625,18 +654,20 @@ func generateMessageProgress(ui *output.UI, ctx context.Context, gen llm.Generat
 //   - anything else (missing, unreadable, corrupt, passphrase-encrypted) is
 //     warned about and commits unsigned.
 //
+// touch is threaded into the agent-backed signer so every signature it
+// produces is prompted and bounded while the smartcard waits for the user.
 // It returns nil for "no usable signer" so callers fall through to an
 // unsigned commit; the returned bool reports whether the signer path used
 // the smartcard (security-key) backend, so the caller can render the
 // correct notice.
-func loadSigner(ui *output.UI, cfg config.Config) (*sign.Signer, bool) {
+func loadSigner(ui *output.UI, cfg config.Config, touchCfg sign.TouchConfig) (*sign.Signer, bool) {
 	// Route to the ssh-agent whenever the key is (or turns out to be) a
 	// FIDO2 security-key handle (id_ed25519_sk): the file is not a private
 	// key at all, it only references a smartcard-held key, and pure Go
 	// cannot sign with it. Both the up-front kind detection and the
 	// ErrSecurityKeyOnly fallback from Load land here.
 	agentSigner := func() (*sign.Signer, bool) {
-		if s, err := sign.SecurityKeySigner(cfg.KeyPath); err == nil {
+		if s, err := sign.SecurityKeySigner(cfg.KeyPath, touchCfg); err == nil {
 			ui.Warn("ssh key %s is a smartcard security key; signing via the ssh-agent", cfg.KeyPath)
 			return s, true
 		} else {

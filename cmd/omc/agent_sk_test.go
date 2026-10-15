@@ -15,6 +15,7 @@ import (
 
 	"paepcke.de/omc/internal/config"
 	"paepcke.de/omc/internal/output"
+	"paepcke.de/omc/internal/sign"
 )
 
 // TestLoadSignerSecurityKeySmokeWithAgent exercises the security-key
@@ -80,7 +81,7 @@ func TestLoadSignerSecurityKeySmokeWithAgent(t *testing.T) {
 	}
 
 	ui := output.New(os.Stdout, os.Stderr)
-	signer, sk := loadSigner(ui, config.Config{KeyPath: handle})
+	signer, sk := loadSigner(ui, config.Config{KeyPath: handle}, sign.TouchConfig{})
 	if signer == nil {
 		t.Fatalf("loadSigner returned nil signer for sk handle with agent")
 	}

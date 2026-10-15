@@ -660,7 +660,7 @@ func TestSSHHostWithPort(t *testing.T) {
 // TestGetSSHAuthEmptyURLs guards the empty remote-URL panic: no URLs means
 // no explicit auth, not a crash.
 func TestGetSSHAuthEmptyURLs(t *testing.T) {
-	auth, err := getSSHAuth("", nil)
+	auth, err := getSSHAuth("", nil, sign.TouchConfig{})
 	if err != nil {
 		t.Fatalf("getSSHAuth with no URLs: %v", err)
 	}
@@ -684,7 +684,7 @@ func TestPushToRemoteURLessRemote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PushToRemote(repo, ""); err == nil {
+	if _, err := PushToRemote(repo, "", sign.TouchConfig{}); err == nil {
 		t.Fatal("expected error for remote without URLs")
 	}
 }
@@ -713,7 +713,7 @@ func TestPushToRemoteDeterministicFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := PushToRemote(repo, "")
+	res, err := PushToRemote(repo, "", sign.TouchConfig{})
 	if err != nil {
 		t.Fatalf("PushToRemote: %v", err)
 	}
