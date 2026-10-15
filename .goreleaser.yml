@@ -1,3 +1,5 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# goreleaser v2 configuration
 version: 2
 
 before:
@@ -16,18 +18,16 @@ builds:
     goos:
       - linux
       - darwin
-      - freebsd
       - openbsd
     goarch:
       - amd64
       - arm64
-    ignore:
 
 archives:
   - id: omc
     formats:
       - tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}{{ if .Mips }}_{{ .Mips }}{{ end }}"
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     wrap_in_directory: true
     files:
       - LICENSE
@@ -47,7 +47,8 @@ changelog:
       - "^ci:"
       - "^chore:"
       - "^style:"
+
 release:
-  github:
-    owner: paepckehh
-    name: omc
+  draft: false
+  prerelease: auto
+  name_template: "{{ .Tag }}"
