@@ -163,7 +163,7 @@ func (a *anim) tick() {
 // a gap, the label, and (once initialized) the animated ellipsis.
 func (a *anim) render() string {
 	var b strings.Builder
-	for i := 0; i < a.size; i++ {
+	for i := range a.size {
 		if !a.initialized && a.frames < a.birthSteps[i] {
 			b.WriteString(a.initialChar[i])
 		} else {

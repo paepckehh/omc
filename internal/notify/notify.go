@@ -14,6 +14,7 @@ package notify
 
 import (
 	"context"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -123,16 +124,20 @@ func (n *dbusNotifier) Notify(summary, body, icon string, expire time.Duration) 
 		"desktop-entry": dbus.MakeVariant("omc"),
 	}
 	// Per the spec: 0 = never expire, -1 = daemon default. Our callers
-	// always pass a positive budget; keep a sane fallback for zero.
-	ms := int32(expire / time.Millisecond)
+	// always pass a positive budget; keep a sane fallback for zero. The
+	// clamp guards the int64→int32 conversion against a huge timeout.
+	ms := expire / time.Millisecond
 	if ms <= 0 {
 		ms = -1
+	}
+	if ms > math.MaxInt32 {
+		ms = math.MaxInt32
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
 	obj := n.conn.Object(notificationsIface, notificationsPath)
 	call := obj.CallWithContext(ctx, notificationsIface+".Notify", 0,
-		"omc", uint32(0), icon, summary, body, []string(nil), hints, ms)
+		"omc", uint32(0), icon, summary, body, []string(nil), hints, int32(ms))
 	if call.Err != nil || len(call.Body) == 0 {
 		return 0
 	}

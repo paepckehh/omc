@@ -404,7 +404,6 @@ func writeIndexTree(repo *git.Repository) (plumbing.Hash, error) {
 
 	nodes := map[string]*indexNode{}
 	var kids []*indexNode
-	seen := map[string]bool{}
 	for _, e := range idx.Entries {
 		parts := strings.Split(e.Name, "/")
 		path := ""
@@ -421,8 +420,7 @@ func writeIndexTree(repo *git.Repository) (plumbing.Hash, error) {
 				nodes[path] = node
 				if prev != "" {
 					nodes[prev].children[part] = node
-				} else if !seen[part] {
-					seen[part] = true
+				} else {
 					kids = append(kids, node)
 				}
 			}
@@ -608,7 +606,7 @@ func SignedTag(repo *git.Repository, hash plumbing.Hash, name, message string, i
 		return nil, fmt.Errorf("sign tag payload: %w", err)
 	}
 	sig := strings.TrimSuffix(string(armored), "\n")
-	content := append(payload, []byte(sig+"\n")...)
+	content := slices.Concat(payload, []byte(sig+"\n"))
 	tagHash, err := storeTagObject(repo, content)
 	if err != nil {
 		return nil, err

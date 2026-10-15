@@ -263,7 +263,7 @@ func (u *UI) renderGroupHeader() {
 	title := u.styles.step.Render(top.title)
 	if n := len(u.groups); n > 1 {
 		var b strings.Builder
-		for i := 0; i < n-1; i++ {
+		for i := range n - 1 {
 			b.WriteString(u.groupTree(u.groups[i]))
 			b.WriteByte(' ')
 		}
@@ -446,7 +446,7 @@ func (u *UI) emit(w io.Writer, level, step, msg string, fields ...Field) {
 		// pops empty the whole tree a separator blank is printed so
 		// groups read as contiguous subtrees.
 		fmt.Fprintln(w, u.renderGroupedLine(ts, level, step, msg, fieldStr))
-		for i := 0; i < len(u.groups); i++ {
+		for i := range u.groups {
 			if u.groups[i].remaining > 0 {
 				u.groups[i].remaining--
 			}
