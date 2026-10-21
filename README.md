@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="docs/screenshots/hero.svg" alt="omc running: one command stages, describes, signs, tags and pushes a commit" width="100%">
-
 # omc
 
 ### oh-my-commit
@@ -13,7 +11,7 @@ Pure Go, one static binary, no `git` process at runtime.
 
 [![Go 1.27+](https://img.shields.io/badge/Go-1.27+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Pure Go](https://img.shields.io/badge/Pure_Go-no_git_binary-7DD3FC?logo=go&logoColor=white)](#how-it-works)
-[![Static binary](https://img.shields.io/badge/Binary-static-F59E0B?logo=go&logoColor=white)](#install)
+[![Static binary](https://img.shields.io/badge/Binary-static-F59E0B?logo=go&logoColor=white)](#-quick-start)
 [![SSH signed](https://img.shields.io/badge/Commits-SSH_signed-8B5CF6?logo=openssh&logoColor=white)](#-signing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22C55E?logo=opensourceinitiative&logoColor=white)](LICENSE)
 
@@ -48,33 +46,38 @@ $ omc
 
 ---
 
-## 🎬 See it run
+## 🚀 Quick start
 
-### The full pipeline — signed, tagged, pushed
-
-<img src="docs/screenshots/hero.svg" alt="omc full pipeline output: stage, diff, LLM message, SSH signing, commit, tag, push" width="100%">
-
-### FIDO2 security key — prompted, notified, bounded
-
-A real YubiKey never blocks the run. Every smartcard wait gets a structured
-record, an animated countdown, a desktop notification after a few seconds, and a
-hard deadline (`OMC_TOUCH_TIMEOUT`, default 60s). A missed touch degrades to an
-unsigned commit instead of hanging your terminal forever.
-
-<img src="docs/screenshots/touch.svg" alt="omc waiting for a FIDO2 touch with a countdown, desktop notification and structured records" width="100%">
-
-### CI and agent mode — every line greppable
-
-Piped logs use the same structured records without the animation:
-
-```text
-<HH:MM:SS> <LEVEL> omc [<step>] <message> [key=value ...]
+```console
+go install paepcke.de/omc/cmd/omc@latest
 ```
 
-Field values containing whitespace are quoted, so `grep 'signed=true'`,
-`grep 'tag='`, and `grep 'outcome=confirmed'` always return clean tokens.
+Then, from anywhere inside a git repository:
 
-<img src="docs/screenshots/ci.svg" alt="omc non-interactive CI output with structured greppable log records" width="100%">
+```console
+omc
+```
+
+That is already a working commit. Now add the good parts:
+
+```console
+export OLLAMA_DESC_URL=http://127.0.0.1:11434   # local AI message
+export OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519      # SSH-signed commit + tag
+export OMC_PUSH_KEY_PATH=~/.ssh/id_ed25519      # push after tagging
+omc
+```
+
+Build from source:
+
+```console
+git clone <this repo>
+cd omc
+make build
+sudo install -m0755 omc /usr/local/bin/
+```
+
+`make build` stamps the latest git tag into the binary with `-ldflags`. A plain
+`go build ./cmd/omc` uses the hardwired version.
 
 ---
 
@@ -120,38 +123,40 @@ state, ever.
 
 ---
 
-## 🚀 Quick start
+## 🎬 See it run
 
-```console
-go install paepcke.de/omc/cmd/omc@latest
+Three terminal captures from a real run. Expand to view them.
+
+<details>
+<summary><b>📸 Screenshots</b> — full pipeline, FIDO2 touch, CI mode</summary>
+
+### The full pipeline — signed, tagged, pushed
+
+<img src="docs/screenshots/hero.svg" alt="omc full pipeline output: stage, diff, LLM message, SSH signing, commit, tag, push" width="820">
+
+### FIDO2 security key — prompted, notified, bounded
+
+A real YubiKey never blocks the run. Every smartcard wait gets a structured
+record, an animated countdown, a desktop notification after a few seconds, and a
+hard deadline (`OMC_TOUCH_TIMEOUT`, default 60s). A missed touch degrades to an
+unsigned commit instead of hanging your terminal forever.
+
+<img src="docs/screenshots/touch.svg" alt="omc waiting for a FIDO2 touch with a countdown, desktop notification and structured records" width="820">
+
+### CI and agent mode — every line greppable
+
+Piped logs use the same structured records without the animation:
+
+```text
+<HH:MM:SS> <LEVEL> omc [<step>] <message> [key=value ...]
 ```
 
-Then, from anywhere inside a git repository:
+Field values containing whitespace are quoted, so `grep 'signed=true'`,
+`grep 'tag='`, and `grep 'outcome=confirmed'` always return clean tokens.
 
-```console
-omc
-```
+<img src="docs/screenshots/ci.svg" alt="omc non-interactive CI output with structured greppable log records" width="820">
 
-That is already a working commit. Now add the good parts:
-
-```console
-export OLLAMA_DESC_URL=http://127.0.0.1:11434   # local AI message
-export OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519      # SSH-signed commit + tag
-export OMC_PUSH_KEY_PATH=~/.ssh/id_ed25519      # push after tagging
-omc
-```
-
-Build from source:
-
-```console
-git clone <this repo>
-cd omc
-make build
-sudo install -m0755 omc /usr/local/bin/
-```
-
-`make build` stamps the latest git tag into the binary with `-ldflags`. A plain
-`go build ./cmd/omc` uses the hardwired version.
+</details>
 
 ---
 
