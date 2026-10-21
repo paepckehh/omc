@@ -89,6 +89,7 @@ internal/output/      UI: stdout = structured results, stderr = structured diagn
                       countdown + deferred desktop notification; the UI
                       implements touch.Hook), nested log groups
 internal/version/     Version string: hardwired semver, overridable via linker -X
+docs/screenshots/     terminal captures used by README.md
 ```
 
 ## Output contract
@@ -103,7 +104,9 @@ headers themselves are timestamped structured lines. The only exception
 is the commit message preview, rendered inside a rounded-border frame.
 Off a TTY the same records are emitted as flat, greppable text. The text
 tokens (`OK`, `INFO`, `WARN`, `FAIL`, step names) are always intact so
-consumers can grep regardless of TTY mode.
+consumers can grep regardless of TTY mode. Field values that contain
+whitespace, quotes, or non-printable runes are quoted (Go `strconv.Quote`
+syntax) so every record stays a single space-separated token per field.
 
 Right after the repository is opened, a `repo` step emits a context
 diagnostic with `dir=` (worktree root), `latest_tag=`, and one
@@ -156,7 +159,9 @@ default remote, authenticated with the push key on SSH remotes) so the
 bump can never collide with a tag that already exists upstream.
 If `OMC_TAG` is set and parses as strict semver, that name (normalized
 with a leading `v`) is used verbatim; otherwise the auto-bump path scans
-all `refs/tags/v*.*.*` refs and bumps the patch segment. The pull itself is
+all valid `refs/tags/v*.*.*` refs (pre-release/build suffixes use their
+base version, malformed trailing segments are ignored) and bumps the patch
+segment. The pull itself is
 a smartcard touch wait when the push key is an FIDO2 handle on an SSH
 remote: prompted and bounded through the same touch policy as everything
 else, and a timeout still degrades (warn, local tag state). When no prior
@@ -203,6 +208,8 @@ config. Config files are only consulted for the identity fallback.
 ## Testing
 
 - `go test ./...` — full suite (config, sign, ollama, openai, gitops, output, e2e).
+- `CGO_ENABLED=1 go test -race ./...` — exercises the spinner/touch/signing
+  concurrency under the race detector.
 - `-short` skips the binary e2e test that compiles the CLI.
 - `make test` / `make vet` are the shortcuts.
 

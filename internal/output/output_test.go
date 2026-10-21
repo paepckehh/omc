@@ -79,6 +79,21 @@ func TestWarnNonTTY(t *testing.T) {
 	}
 }
 
+func TestFieldsQuotedWhenNeeded(t *testing.T) {
+	ui, _, err := newTestUI()
+	ui.emit(ui.Err, "WARN", "", "boom", F("err", "agent refused"), F("url", "https://x/?a=b"), F("key", "/home/me/.ssh/agent"))
+	got := err.String()
+	for _, want := range []string{
+		`err="agent refused"`,
+		"url=https://x/?a=b",
+		"key=/home/me/.ssh/agent",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("field %q not rendered correctly, got: %q", want, got)
+		}
+	}
+}
+
 func TestConfigNoticeNonTTY(t *testing.T) {
 	ui, _, err := newTestUI()
 	ui.ConfigNotice(
@@ -153,6 +168,23 @@ func TestSpinnerNonTTY(t *testing.T) {
 	}
 	if !strings.Contains(got, "condensing to TL;DR") {
 		t.Errorf("missing update caption, got: %q", got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "condensing to TL;DR") && !strings.Contains(line, "ollama") {
+			t.Errorf("update phase lost its step name, got: %q", line)
+		}
+	}
+}
+
+func TestStartupDoesNotRepeatBrand(t *testing.T) {
+	ui, _, err := newTestUI()
+	ui.Startup("v9.9.9")
+	got := err.String()
+	if strings.Count(got, "omc") != 1 {
+		t.Errorf("startup banner should name omc once, got: %q", got)
+	}
+	if !strings.Contains(got, "v9.9.9") {
+		t.Errorf("startup banner missing version, got: %q", got)
 	}
 }
 

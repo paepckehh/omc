@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1460" height="1060" viewBox="0 0 1460 1060" role="img" aria-label="CI / agent mode — every line greppable">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#05070d"/><stop offset="0.55" stop-color="#0b1020"/><stop offset="1" stop-color="#0d1117"/>
+  </linearGradient>
+  <linearGradient id="win" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#111827"/><stop offset="1" stop-color="#0b0f16"/>
+  </linearGradient>
+  <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#151b26"/><stop offset="1" stop-color="#0f141d"/>
+  </linearGradient>
+  <radialGradient id="glowA" cx="0.5" cy="0.5" r="0.5">
+    <stop offset="0" stop-color="#7d56f4" stop-opacity="0.38"/><stop offset="1" stop-color="#7d56f4" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="glowB" cx="0.5" cy="0.5" r="0.5">
+    <stop offset="0" stop-color="#58a6ff" stop-opacity="0.26"/><stop offset="1" stop-color="#58a6ff" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+    <feDropShadow dx="0" dy="26" stdDeviation="26" flood-color="#000000" flood-opacity="0.65"/>
+  </filter>
+  <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+    <feGaussianBlur stdDeviation="9"/>
+  </filter>
+</defs>
+<rect width="1460" height="1060" fill="url(#bg)"/>
+<circle cx="146" cy="53" r="510" fill="url(#glowA)"/>
+<circle cx="1343" cy="932" r="467" fill="url(#glowB)"/>
+<rect x="46" y="40" width="1368" height="980" rx="18" fill="url(#win)" stroke="#30363d" stroke-width="1.2" filter="url(#shadow)"/>
+<rect x="46" y="40" width="1368" height="54" rx="18" fill="url(#bar)"/>
+<rect x="46" y="76" width="1368" height="18" fill="url(#bar)"/>
+<line x1="46" y1="94" x2="1414" y2="94" stroke="#30363d" stroke-width="1"/>
+<circle cx="70" cy="67" r="6.2" fill="#ff5f56"/>
+<circle cx="91" cy="67" r="6.2" fill="#ffbd2e"/>
+<circle cx="112" cy="67" r="6.2" fill="#27c93f"/>
+<text x="730.0" y="72" text-anchor="middle" fill="#8b949e" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji'" font-size="13">CI / agent mode — every line greppable</text>
+<text x="80" y="128" font-size="15" class=""><tspan fill="#3fb950" font-weight="600">$ </tspan><tspan fill="#e6edf3">OMC_SIGN_KEY_PATH=/keys/agent omc 2&gt;&amp;1 | tee ci.log</tspan></text>
+<text x="80" y="155" font-size="15" class=""><tspan fill="#6e7681">12:04:07</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> v0.1.50</tspan></text>
+<text x="80" y="182" font-size="15" class=""><tspan fill="#6e7681">12:04:07</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> config detected environment count=2 OMC_SIGN_KEY_PATH=/keys/agent OLLAMA_DESC_URL=http://127.0.0.1:11434</tspan></text>
+<text x="80" y="209" font-size="15" class=""><tspan fill="#6e7681">12:04:07</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> config verified config count=2 sign_key=valid=true ollama=configured=true</tspan></text>
+<text x="80" y="236" font-size="15" class=""><tspan fill="#6e7681">12:04:07</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 📂 open detecting repository</tspan></text>
+<text x="80" y="263" font-size="15" class=""><tspan fill="#6e7681">12:04:07</tspan><tspan fill="#c9d1d9"> ✅ </tspan><tspan fill="#3fb950" font-weight="600">OK</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 📂 open done</tspan></text>
+<text x="80" y="290" font-size="15" class=""><tspan fill="#6e7681">12:04:07</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> repo detected repository context dir=/work/repo latest_tag=v0.9.4 origin_url=git@github.com:acme/app.git</tspan></text>
+<text x="80" y="317" font-size="15" class=""><tspan fill="#6e7681">12:04:07</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 📥 stage staging all changes</tspan></text>
+<text x="80" y="344" font-size="15" class=""><tspan fill="#6e7681">12:04:07</tspan><tspan fill="#c9d1d9"> ✅ </tspan><tspan fill="#3fb950" font-weight="600">OK</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 📥 stage done</tspan></text>
+<text x="80" y="371" font-size="15" class=""><tspan fill="#6e7681">12:04:07</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 🔍 diff reading staged diff</tspan></text>
+<text x="80" y="398" font-size="15" class=""><tspan fill="#6e7681">12:04:07</tspan><tspan fill="#c9d1d9"> ✅ </tspan><tspan fill="#3fb950" font-weight="600">OK</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 🔍 diff done</tspan></text>
+<text x="80" y="425" font-size="15" class=""><tspan fill="#6e7681">12:04:07</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 🔍 diff changed files count=2</tspan></text>
+<text x="80" y="452" font-size="15" class=""><tspan fill="#c9d1d9">  - internal/api.go</tspan></text>
+<text x="80" y="479" font-size="15" class=""><tspan fill="#c9d1d9">  - internal/api_test.go</tspan></text>
+<text x="80" y="506" font-size="15" class=""><tspan fill="#6e7681">12:04:07</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 🤖 ollama probing ollama at http://127.0.0.1:11434</tspan></text>
+<text x="80" y="533" font-size="15" class=""><tspan fill="#6e7681">12:04:07</tspan><tspan fill="#c9d1d9"> ✅ </tspan><tspan fill="#3fb950" font-weight="600">OK</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 🤖 ollama done</tspan></text>
+<text x="80" y="560" font-size="15" class=""><tspan fill="#6e7681">12:04:08</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 🤖 ollama generating commit message</tspan></text>
+<text x="80" y="587" font-size="15" class=""><tspan fill="#6e7681">12:04:09</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 🤖 ollama condensing to TL;DR</tspan></text>
+<text x="80" y="614" font-size="15" class=""><tspan fill="#6e7681">12:04:09</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 💬 msg subject: harden API token comparison</tspan></text>
+<text x="80" y="641" font-size="15" class=""><tspan fill="#6e7681">12:04:09</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 💬 msg body:</tspan></text>
+<text x="80" y="668" font-size="15" class=""><tspan fill="#c9d1d9">  - uses constant-time comparison for bearer tokens</tspan></text>
+<text x="80" y="695" font-size="15" class=""><tspan fill="#c9d1d9">  - adds a regression test for the timing oracle</tspan></text>
+<text x="80" y="722" font-size="15" class=""><tspan fill="#6e7681">12:04:09</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 🔑 load key loading ssh signing key</tspan></text>
+<text x="80" y="749" font-size="15" class=""><tspan fill="#6e7681">12:04:09</tspan><tspan fill="#c9d1d9"> ✅ </tspan><tspan fill="#3fb950" font-weight="600">OK</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 🔑 load key done</tspan></text>
+<text x="80" y="776" font-size="15" class=""><tspan fill="#6e7681">12:04:09</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> signing with /keys/agent (ssh-ed25519)</tspan></text>
+<text x="80" y="803" font-size="15" class=""><tspan fill="#6e7681">12:04:09</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 📝 commit committing as agent &lt;agent@acme.dev&gt; (signed)</tspan></text>
+<text x="80" y="830" font-size="15" class=""><tspan fill="#6e7681">12:04:10</tspan><tspan fill="#c9d1d9"> ✅ </tspan><tspan fill="#3fb950" font-weight="600">OK</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 📝 commit committed hash=9d3f2ab signed=true</tspan></text>
+<text x="80" y="857" font-size="15" class=""><tspan fill="#6e7681">12:04:10</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 🏷️ tag bumping semver patch</tspan></text>
+<text x="80" y="884" font-size="15" class=""><tspan fill="#6e7681">12:04:10</tspan><tspan fill="#c9d1d9"> ✅ </tspan><tspan fill="#3fb950" font-weight="600">OK</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 🏷️ tag tagged tag=v0.9.5 hash=9d3f2ab signed=true</tspan></text>
+<text x="80" y="911" font-size="15" class=""><tspan fill="#6e7681">12:04:10</tspan><tspan fill="#c9d1d9"> ℹ️ </tspan><tspan fill="#58a6ff" font-weight="600">INFO</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 🚀 push pushing commit and tags to remote</tspan></text>
+<text x="80" y="938" font-size="15" class=""><tspan fill="#6e7681">12:04:11</tspan><tspan fill="#c9d1d9"> ✅ </tspan><tspan fill="#3fb950" font-weight="600">OK</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 🚀 push done</tspan></text>
+<text x="80" y="965" font-size="15" class=""><tspan fill="#6e7681">12:04:11</tspan><tspan fill="#c9d1d9"> ✅ </tspan><tspan fill="#3fb950" font-weight="600">OK</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#a371f7" font-weight="600">omc</tspan><tspan fill="#c9d1d9"> 🚀 push pushed remote=origin branch=main tags=true</tspan></text>
+
+</svg>

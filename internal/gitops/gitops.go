@@ -495,7 +495,9 @@ func indexOrder(n *indexNode) string {
 // leading "v", where each numeric component has no leading zeros (except a
 // lone 0). Pre-release suffixes (e.g. -rc.1) and build metadata (+build) are
 // ignored for patch bumping: the base version still determines the next tag.
-var semverRe = regexp.MustCompile(`^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)`)
+// Anything else after the patch segment (v1.2.3.4, v1.2.3junk) is not a
+// semver tag and must not influence the bump.
+var semverRe = regexp.MustCompile(`^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:[-+].*)?$`)
 
 // strictSemverRe matches an entire string of the form vMAJOR.MINOR.PATCH
 // (leading "v" optional) where each numeric component has no leading zeros
@@ -844,7 +846,10 @@ func PullTags(repo *git.Repository, keyPath string, touchCfg sign.TouchConfig) e
 	if err != nil {
 		return err
 	}
-	auth, err := getSSHAuth(keyPath, r.URLs, touchCfg)
+	// Fetch uses the remote's first URL (PushToRemote uses the last one;
+	// see RepoContext.Remotes), so the SSH identity is derived from the
+	// fetch target, not the push target.
+	auth, err := getSSHAuth(keyPath, r.URLs[:1], touchCfg)
 	if err != nil {
 		return err
 	}

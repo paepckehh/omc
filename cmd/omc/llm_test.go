@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"paepcke.de/omc/internal/config"
 	"paepcke.de/omc/internal/llm"
 	"paepcke.de/omc/internal/ollama"
 	"paepcke.de/omc/internal/openai"
+	"paepcke.de/omc/internal/output"
 )
 
 func TestResolveGeneratorsOllamaPreferred(t *testing.T) {
@@ -124,5 +129,96 @@ func TestConfigReportNoTokenWhenEmpty(t *testing.T) {
 		if f.Key == "OPENAPI_TOKEN" {
 			t.Errorf("did not expect OPENAPI_TOKEN in detected report when empty")
 		}
+	}
+}
+
+// stubGenerator is a scripted llm.Generator for exercising the fallback
+// chain without any network.
+type stubGenerator struct {
+	available   bool
+	detail      string
+	detailErr   error
+	tldr        string
+	tldrErr     error
+	detailCalls int
+}
+
+func (s *stubGenerator) Available(context.Context) bool { return s.available }
+
+func (s *stubGenerator) DescribeDetail(context.Context, string, string) (string, error) {
+	s.detailCalls++
+	return s.detail, s.detailErr
+}
+
+func (s *stubGenerator) SummarizeTLDR(context.Context, string) (string, error) {
+	return s.tldr, s.tldrErr
+}
+
+func newLLMTestUI() *output.UI {
+	return output.New(&bytes.Buffer{}, &bytes.Buffer{})
+}
+
+func TestGenerateMessageFallsBackWhenUnreachable(t *testing.T) {
+	first := &stubGenerator{available: false}
+	second := &stubGenerator{available: true, detail: "body", tldr: "subject"}
+	got := generateMessage(newLLMTestUI(), context.Background(), []llmCandidate{
+		{gen: first, step: "ollama", url: "http://one"},
+		{gen: second, step: "openai", url: "http://two"},
+	}, "diff", nil)
+	if got.Subject != "subject" || got.Body != "body" {
+		t.Errorf("message = %+v, want subject/body from the second backend", got)
+	}
+	if first.detailCalls != 0 {
+		t.Errorf("unreachable backend was asked to generate")
+	}
+}
+
+func TestGenerateMessageFallsBackWhenDetailFails(t *testing.T) {
+	first := &stubGenerator{available: true, detailErr: errors.New("boom")}
+	second := &stubGenerator{available: true, detail: "body", tldr: "subject"}
+	got := generateMessage(newLLMTestUI(), context.Background(), []llmCandidate{
+		{gen: first, step: "ollama", url: "http://one"},
+		{gen: second, step: "openai", url: "http://two"},
+	}, "diff", nil)
+	if got.Subject != "subject" || got.Body != "body" {
+		t.Errorf("message = %+v, want the fallback backend's message", got)
+	}
+}
+
+func TestGenerateMessageSalvagesDetailWhenTLDRFails(t *testing.T) {
+	first := &stubGenerator{available: true, detail: "first line\nmore detail", tldrErr: errors.New("boom")}
+	second := &stubGenerator{available: true, detail: "other", tldr: "other"}
+	got := generateMessage(newLLMTestUI(), context.Background(), []llmCandidate{
+		{gen: first, step: "ollama", url: "http://one"},
+		{gen: second, step: "openai", url: "http://two"},
+	}, "diff", nil)
+	if got.Subject != "first line" || got.Body != "first line\nmore detail" {
+		t.Errorf("message = %+v, want the salvaged detail", got)
+	}
+	if second.detailCalls != 0 {
+		t.Errorf("fallback backend called despite a usable partial result")
+	}
+}
+
+func TestGenerateMessageSanitizesSubject(t *testing.T) {
+	long := strings.Repeat("x", 100) + "\nsecond line"
+	gen := &stubGenerator{available: true, detail: "body", tldr: long}
+	got := generateMessage(newLLMTestUI(), context.Background(), []llmCandidate{
+		{gen: gen, step: "ollama", url: "http://one"},
+	}, "diff", nil)
+	if strings.ContainsRune(got.Subject, '\n') {
+		t.Errorf("subject still contains a newline: %q", got.Subject)
+	}
+	if n := utf8.RuneCountInString(got.Subject); n > 72 {
+		t.Errorf("subject = %d runes, want <= 72", n)
+	}
+}
+
+func TestGenerateMessageAllBackendsFail(t *testing.T) {
+	got := generateMessage(newLLMTestUI(), context.Background(), []llmCandidate{
+		{gen: &stubGenerator{available: true, detailErr: errors.New("boom")}, step: "ollama", url: "http://one"},
+	}, "diff", nil)
+	if got.Subject != "update" {
+		t.Errorf("subject = %q, want update", got.Subject)
 	}
 }

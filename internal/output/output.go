@@ -43,6 +43,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
@@ -372,21 +373,39 @@ func (u *UI) renderFrame(subject, body string) string {
 func now() string { return time.Now().Format("15:04:05") }
 
 // renderFields renders a slice of key=value fields as "key=val key=val".
+// Values are quoted with strconv.Quote when they contain whitespace, `"`,
+// or a non-printable rune, so a multi-word error or action label cannot
+// break the space-separated record into ambiguous tokens.
 func (u *UI) renderFields(fields []Field) string {
 	if len(fields) == 0 {
 		return ""
 	}
 	var parts []string
 	for _, f := range fields {
+		val := fieldValue(f.Val)
 		if u.tty {
 			parts = append(parts, fmt.Sprintf("%s=%s",
 				u.styles.key.Render(f.Key),
-				u.styles.val.Render(f.Val)))
+				u.styles.val.Render(val)))
 		} else {
-			parts = append(parts, fmt.Sprintf("%s=%s", f.Key, f.Val))
+			parts = append(parts, fmt.Sprintf("%s=%s", f.Key, val))
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// fieldValue renders a field value so it stays a single token: values that
+// contain whitespace, non-printable runes, or `"` are quoted.
+func fieldValue(v string) string {
+	if v == "" {
+		return v
+	}
+	if strings.ContainsRune(v, '"') || strings.ContainsFunc(v, func(r rune) bool {
+		return unicode.IsSpace(r) || !unicode.IsPrint(r)
+	}) {
+		return strconv.Quote(v)
+	}
+	return v
 }
 
 // emit writes a structured log record to w. level is one of OK/INFO/WARN/FAIL.
@@ -693,6 +712,7 @@ func (u *UI) stopSpinner() {
 // line instead of animating, keeping captured logs greppable.
 func (u *UI) SpinnerStart(step, msg string) {
 	if !u.tty {
+		u.animStep = step
 		u.emit(u.Err, "INFO", step, msg)
 		return
 	}
@@ -821,7 +841,7 @@ func (u *UI) Summary(subject, body string) {
 // version string is the hardwired/linker-stamped value from
 // internal/version (see AGENTS.md "Release / version stamping").
 func (u *UI) Startup(version string) {
-	u.emit(u.Err, "INFO", "", Brand+" "+version)
+	u.emit(u.Err, "INFO", "", version)
 }
 
 // ConfigNotice prints the startup environment/configuration summary to

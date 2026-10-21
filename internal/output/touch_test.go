@@ -50,7 +50,7 @@ func TestTouchBeginEndNonTTY(t *testing.T) {
 		"smartcard/yubikey",
 		"key=/k/id_ed25519_sk",
 		"algo=sk-ssh-ed25519@openssh.com",
-		"action=the commit signing",
+		"action=\"the commit signing\"",
 		"timeout=10s",
 		"OK", "touch confirmed, thank you",
 		"outcome=confirmed",
@@ -96,7 +96,7 @@ func TestTouchErrorNonTTY(t *testing.T) {
 	if !strings.Contains(got, "security key wait ended with an error") {
 		t.Errorf("missing error outcome record, got: %q", got)
 	}
-	if !strings.Contains(got, "outcome=error") || !strings.Contains(got, "err=agent refused") {
+	if !strings.Contains(got, "outcome=error") || !strings.Contains(got, `err="agent refused"`) {
 		t.Errorf("missing structured outcome/err fields, got: %q", got)
 	}
 }

@@ -403,7 +403,7 @@ func TestLatestSemverTagFindsHighest(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := Identity{Name: "Tagger", Email: "tag@example.com"}
-	for _, name := range []string{"v0.1.0", "v0.0.5", "v1.0.0", "v0.10.0", "notsemver", "v0.1.0-rc.1"} {
+	for _, name := range []string{"v0.1.0", "v0.0.5", "v1.0.0", "v0.10.0", "notsemver", "v0.1.0-rc.1", "v9.9.9junk", "v2.0.0.1"} {
 		if _, err := CreateTag(repo, h, name, "msg", id); err != nil {
 			t.Fatalf("CreateTag(%s): %v", name, err)
 		}

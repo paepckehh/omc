@@ -6,7 +6,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/go-git/go-git/v5 v5.19.3
-	github.com/godbus/dbus/v5 v5.1.0
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/hiddeco/sshsig v0.2.0
 	github.com/lucasb-eyer/go-colorful v1.4.1
 	golang.org/x/crypto v0.58.0

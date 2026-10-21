@@ -205,17 +205,7 @@ func run() int {
 		// number of candidates. Off a TTY the group is a no-op and the
 		// flat records stay greppable.
 		ui.BeginGroup("💬 message generation", 2*len(candidates))
-		gen, step := probeGenerators(ui, ctx, candidates)
-		if gen != nil {
-			var genErr error
-			msg, genErr = generateMessageProgress(ui, ctx, gen, step, diffText, files)
-			if genErr != nil {
-				ui.Warn("llm message generation failed: %v", genErr)
-				msg = gitops.CommitMessage{Subject: "update"}
-			}
-		} else {
-			ui.Warn("no llm backend reachable, using default message")
-		}
+		msg = generateMessage(ui, ctx, candidates, diffText, files)
 		ui.EndGroup()
 	}
 
@@ -278,9 +268,9 @@ func run() int {
 	}
 	pushLines := 0
 	if cfg.PushKeyPath != "" {
-		pushLines = 1 // step completion (OK or FAIL); a failure WARN degrades flat
+		pushLines = 2 // step completion + pushed result (OK or FAIL; a failure WARN degrades flat)
 		if sign.IsSecurityKeyPath(cfg.PushKeyPath) {
-			pushLines = 3 // push touch pair + step completion
+			pushLines = 4 // push touch pair + step completion + pushed result
 		}
 	}
 	ui.BeginGroup("📦 committing & publishing", commitLines+tagLines+pushLines)
@@ -369,10 +359,7 @@ func run() int {
 	// through touchCfg like every other smartcard wait.
 	if cfg.PushKeyPath != "" {
 		ui.BeginGroup("🚀 push", pushLines)
-		if err := ui.Step("push", "pushing commit and tags to remote", func() error {
-			_, err := gitops.PushToRemote(repo, cfg.PushKeyPath, touchCfg.For("the push"))
-			return err
-		}); err != nil {
+		if _, err := pushPhase(ui, repo, cfg, touchCfg); err != nil {
 			ui.Warn("push failed (%v); commit and tag left local", err)
 		}
 		ui.EndGroup() // push phase (closes the still-open reserve-slot group)
@@ -475,6 +462,18 @@ func pushNothing(ui *output.UI, repo *git.Repository, cfg config.Config, touchCf
 	if cfg.PushKeyPath == "" {
 		return
 	}
+	if _, err := pushPhase(ui, repo, cfg, touchCfg); err != nil {
+		ui.Warn("push failed (%v); nothing pushed", err)
+	}
+}
+
+// pushPhase runs the push step and reports the success record (remote,
+// branch, tags) on stdout. Both the post-commit path and the clean-tree path
+// route through it so the two flows cannot drift: before this helper the
+// normal commit+push run silently omitted the pushed result, while the
+// clean-tree path printed it. On failure the caller adds its context-specific
+// warning; the commit and tag are never rolled back.
+func pushPhase(ui *output.UI, repo *git.Repository, cfg config.Config, touchCfg sign.TouchConfig) (gitops.PushResult, error) {
 	var res gitops.PushResult
 	err := ui.Step("push", "pushing commit and tags to remote", func() error {
 		var perr error
@@ -482,10 +481,10 @@ func pushNothing(ui *output.UI, repo *git.Repository, cfg config.Config, touchCf
 		return perr
 	})
 	if err != nil {
-		ui.Warn("push failed (%v); nothing pushed", err)
-		return
+		return res, err
 	}
 	ui.PushResult(res.Remote, res.Branch, res.Tags)
+	return res, nil
 }
 
 // resolveTagName decides the tag name for the new commit. When OMC_TAG
@@ -591,26 +590,40 @@ func resolveGenerators(cfg config.Config) []llmCandidate {
 	return out
 }
 
-// probeGenerators probes each candidate in order and returns the first
-// reachable one (with its step name for log lines). An unreachable backend is
-// not a pipeline failure (it is the normal degrade path): each probe is a
-// spinner step reported as successful either way, and a warning names the
-// backend that was skipped so the fallback is visible in the log. When no
-// candidate is reachable, nil is returned and the caller falls back to the
-// default subject.
-func probeGenerators(ui *output.UI, ctx context.Context, candidates []llmCandidate) (llm.Generator, string) {
+// generateMessage probes the configured backends in order and returns the
+// first usable message. An unreachable backend is skipped; a backend that
+// probes successfully but fails while generating is abandoned in favor of
+// the next one, matching the documented "Ollama unreachable or failing →
+// OpenAI-compatible fallback → update" chain. A detail body generated
+// before the TL;DR pass failed is salvaged as a partial result instead of
+// being thrown away. Every failure degrades to the next backend (or the
+// default subject) with a warning; it never blocks the commit.
+func generateMessage(ui *output.UI, ctx context.Context, candidates []llmCandidate, diff string, files []string) gitops.CommitMessage {
 	for _, c := range candidates {
 		var ok bool
 		_ = ui.Step(c.step, "probing "+c.step+" at "+c.url, func() error {
 			ok = c.gen.Available(ctx)
 			return nil
 		})
-		if ok {
-			return c.gen, c.step
+		if !ok {
+			ui.Warn("%s not reachable at %s", c.step, c.url)
+			continue
 		}
-		ui.Warn("%s not reachable at %s", c.step, c.url)
+		msg, err := generateMessageProgress(ui, ctx, c.gen, c.step, diff, files)
+		if strings.TrimSpace(msg.String()) != "" {
+			if err != nil {
+				ui.Warn("%s tl;dr generation failed (%v); using the generated detail", c.step, err)
+			}
+			return msg
+		}
+		if err != nil {
+			ui.Warn("%s message generation failed: %v", c.step, err)
+		} else {
+			ui.Warn("%s returned an empty message", c.step)
+		}
 	}
-	return nil, ""
+	ui.Warn("no llm backend produced a message, using default message")
+	return gitops.CommitMessage{Subject: "update"}
 }
 
 // generateMessageProgress performs the two-step LLM conversation (detailed
@@ -635,13 +648,21 @@ func generateMessageProgress(ui *output.UI, ctx context.Context, gen llm.Generat
 	ui.SpinnerUpdate("condensing to TL;DR")
 
 	tldr, err := gen.SummarizeTLDR(ctx, detail)
-	if err != nil {
-		ui.SpinnerStop()
-		return gitops.CommitMessage{}, err
-	}
 	ui.SpinnerStop()
+	if err != nil {
+		// The expensive detail pass succeeded; keep its first line as
+		// the subject and return the body instead of discarding it.
+		return gitops.CommitMessage{Subject: shortenSubject(detail), Body: detail}, err
+	}
 
-	return gitops.CommitMessage{Subject: tldr, Body: detail}, nil
+	subject := shortenSubject(tldr)
+	if subject == "" {
+		subject = shortenSubject(detail)
+	}
+	if subject == "" {
+		subject = "update"
+	}
+	return gitops.CommitMessage{Subject: subject, Body: detail}, nil
 }
 
 // loadSigner resolves the commit signing backend for the configured ssh key
