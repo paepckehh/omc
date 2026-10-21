@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="omc — a commit node with a signature check">
+  <defs>
+    <linearGradient id="omc-tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0.2" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <linearGradient id="omc-gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.34"/>
+      <stop offset="0.6" stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="omc-clip">
+      <rect width="512" height="512" rx="128"/>
+    </clipPath>
+    <filter id="omc-glow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="128" fill="#6366f1" opacity="0.5" filter="url(#omc-glow)"/>
+  <rect width="512" height="512" rx="128" fill="url(#omc-tile)"/>
+
+  <g clip-path="url(#omc-clip)">
+    <rect width="512" height="300" fill="url(#omc-gloss)"/>
+  </g>
+
+  <rect x="1.5" y="1.5" width="509" height="509" rx="126.5" fill="none" stroke="#ffffff" stroke-opacity="0.22" stroke-width="3"/>
+
+  <path d="M96 256h320" fill="none" stroke="#04060d" stroke-width="42" stroke-linecap="round"/>
+  <circle cx="256" cy="256" r="100" fill="#04060d"/>
+  <path d="M212 259l30 31 58-64" fill="none" stroke="#67e8f9" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

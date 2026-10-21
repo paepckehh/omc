@@ -89,6 +89,9 @@ internal/output/      UI: stdout = structured results, stderr = structured diagn
                       countdown + deferred desktop notification; the UI
                       implements touch.Hook), nested log groups
 internal/version/     Version string: hardwired semver, overridable via linker -X
+docs/branding/        icon (omc-icon.svg), transparent mark (omc-mark.svg),
+                      brand sheet (palette, geometry, usage); the icon heads
+                      README.md
 docs/screenshots/     terminal captures used by README.md
 ```
 

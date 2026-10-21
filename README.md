@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/branding/omc-icon.svg" alt="omc icon: a commit node with a check mark" width="104">
+
 # omc
 
 ### oh-my-commit
@@ -474,6 +476,7 @@ internal/ollama/       local Ollama backend
 internal/openai/       OpenAI-compatible fallback backend
 internal/output/       structured records, spinner, log groups, touch prompt
 internal/version/      hardwired semver, overridable with -ldflags
+docs/branding/         icon, mark and the brand sheet (palette, geometry, rules)
 docs/screenshots/      the terminal captures shown above
 ```
 
