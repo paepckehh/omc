@@ -137,7 +137,13 @@ state, ever.
 
 ## 🎬 See it run
 
-Three terminal captures from a real run. Expand to view them.
+A real run, start to finish: a scratch repo, one edited file, an SSH key, and
+nothing else. This is the actual terminal output, wrapped only at the window
+edge. Signing, the commit hash, and the tag are all genuine.
+
+<img src="docs/screenshots/run.svg" alt="real omc terminal run: signing key loaded, commit and tag signed, hash and v0.0.1 produced" width="820">
+
+More terminal captures below. Expand to view them.
 
 <details>
 <summary><b>📸 Screenshots</b> — full pipeline, FIDO2 touch, CI mode</summary>
