@@ -21,6 +21,16 @@ Pure Go, one static binary, no `git` process at runtime.
 
 </div>
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/hero-light.svg">
+  <img src="docs/hero-dark.svg" width="100%" alt="omc hero banner: one command, zero flags, and a dashboard showing stage, diff, describe, sign, commit, tag and push">
+</picture>
+
+The banner is the whole run in one frame: `$ omc` expanded into its seven steps,
+each mapped to the git command it replaces. GitHub picks the variant matching
+your theme; the hand-built SVG stays sharp at any width.
+
 ---
 
 ## ⚡ The whole interface

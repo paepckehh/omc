@@ -12,6 +12,8 @@ rounded squircle tile with an indigo→cyan gradient and a near-black glyph.
 | --- | --- |
 | `omc-icon.svg` | Primary app/social icon. Gradient tile, dark glyph. 512 × 512. |
 | `omc-mark.svg` | Glyph only, transparent background, gradient fill, check knocked out. Use on any background. |
+| `../hero-dark.svg` | Dark-theme README banner: brand lockup, value chips, pipeline dashboard, command box. 1400 × 600. |
+| `../hero-light.svg` | Light-theme counterpart of `hero-dark.svg`. Same geometry, light palette. |
 
 ## Palette
 

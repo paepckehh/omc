@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="600" viewBox="0 0 1400 600" role="img" aria-label="omc hero banner: one command, zero flags, and a dashboard showing stage, diff, describe, sign, commit, tag and push">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#f8faff"/><stop offset="0.55" stop-color="#eef3fc"/><stop offset="1" stop-color="#e8eef9"/>
+  </linearGradient>
+  <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#f8fafd"/>
+  </linearGradient>
+  <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0.2" stop-color="#6366f1"/><stop offset="1" stop-color="#22d3ee"/>
+  </linearGradient>
+  <linearGradient id="accentline" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#5b5ff0"/><stop offset="1" stop-color="#0891b2"/>
+  </linearGradient>
+  <radialGradient id="glowA" cx="0.5" cy="0.5" r="0.5">
+    <stop offset="0" stop-color="#5b5ff0" stop-opacity="0.16"/><stop offset="1" stop-color="#5b5ff0" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="glowB" cx="0.5" cy="0.5" r="0.5">
+    <stop offset="0" stop-color="#0891b2" stop-opacity="0.12"/><stop offset="1" stop-color="#0891b2" stop-opacity="0"/>
+  </radialGradient>
+  <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%">
+    <feDropShadow dx="0" dy="20" stdDeviation="22" flood-color="#1b2a4a" flood-opacity="0.16"/>
+  </filter>
+  <pattern id="grid" width="34" height="34" patternUnits="userSpaceOnUse">
+    <circle cx="1" cy="1" r="1" fill="#0b1220" opacity="0.045"/>
+  </pattern>
+  <clipPath id="panelClip"><rect x="648" y="64" width="688" height="480" rx="18"/></clipPath>
+</defs>
+
+<rect width="1400" height="600" fill="url(#bg)"/>
+<rect width="1400" height="600" fill="url(#grid)"/>
+<circle cx="140" cy="60" r="430" fill="url(#glowA)"/>
+<circle cx="1290" cy="560" r="420" fill="url(#glowB)"/>
+
+<g>
+  <rect x="64" y="64" width="76" height="76" rx="20" fill="url(#brand)"/>
+  <path d="M78 102h48" fill="none" stroke="#04060d" stroke-width="6.4" stroke-linecap="round"/>
+  <circle cx="102" cy="102" r="15" fill="#04060d"/>
+  <path d="M95.6 102.4l4.6 4.7 8.8-9.7" fill="none" stroke="#67e8f9" stroke-width="3.9" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+<text x="160" y="118" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="48" font-weight="800" letter-spacing="-1.6" fill="#0b1220">omc</text>
+<text x="161" y="143" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13" font-weight="600" letter-spacing="4.4" fill="#55607a">OH-MY-COMMIT</text>
+
+<text x="64" y="206" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="29" font-weight="700" letter-spacing="-0.8" fill="#0b1220">One command. Zero flags.</text>
+<text x="64" y="238" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#55607a">Every commit described, signed,</text>
+<text x="64" y="263" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="18" fill="#55607a">semver-tagged and pushed.</text>
+
+<rect x="64" y="286" width="74" height="30" rx="15" fill="#f1f5fc" stroke="#d5ddea" stroke-width="1"/><text x="101" y="306" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#55607a">pure Go</text>
+<rect x="147" y="286" width="112" height="30" rx="15" fill="#f1f5fc" stroke="#d5ddea" stroke-width="1"/><text x="203" y="306" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#55607a">no git binary</text>
+<rect x="268" y="286" width="96" height="30" rx="15" fill="#f1f5fc" stroke="#d5ddea" stroke-width="1"/><text x="316" y="306" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#55607a">SSH signed</text>
+<rect x="373" y="286" width="94" height="30" rx="15" fill="#f1f5fc" stroke="#d5ddea" stroke-width="1"/><text x="420" y="306" text-anchor="middle" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#55607a">zero flags</text>
+
+<text x="64" y="356" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="11" font-weight="700" letter-spacing="2.6" fill="#7b8598">EQUIVALENT OF</text>
+<rect x="64" y="368" width="524" height="118" rx="12" fill="#f3f7fd" stroke="#d5ddea" stroke-width="1"/>
+<rect x="64" y="368" width="4" height="118" rx="2" fill="url(#accentline)"/>
+<text x="88" y="394" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.5" fill="#0b1220">git add -A</text>
+<text x="88" y="416" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.5" fill="#0b1220">git commit -S -am &quot;&lt;generated&gt;&quot;</text>
+<text x="88" y="438" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.5" fill="#0b1220">git tag -s v0.1.53 -m &#x22;&lt;subject&gt;&#x22;</text>
+<text x="88" y="460" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="12.5" fill="#0b1220">git push &amp;&amp; git push --tags</text>
+
+<circle cx="72" cy="510" r="8" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1.2"/>
+<path d="M68.4 510l2.6 2.6 4.8-5.4" fill="none" stroke="#15803d" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="90" y="514" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="14" fill="#55607a">Always degrades, never blocks. Local work is never lost.</text>
+
+<g filter="url(#shadow)">
+  <rect x="648" y="64" width="688" height="480" rx="18" fill="url(#panel)" stroke="#d5ddea" stroke-width="1.2"/>
+</g>
+<g clip-path="url(#panelClip)">
+  <rect x="648" y="64" width="688" height="38" fill="#ffffff"/>
+  <rect x="648" y="64" width="688" height="38" fill="#ffffff" opacity="0.55"/>
+  <line x1="648" y1="102" x2="1336" y2="102" stroke="#e6ebf3" stroke-width="1"/>
+  <circle cx="670" cy="83" r="5" fill="#ff5f56"/>
+  <circle cx="688" cy="83" r="5" fill="#ffbd2e"/>
+  <circle cx="706" cy="83" r="5" fill="#27c93f"/>
+  <text x="992" y="87.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" fill="#7b8598">omc — zero flags, signed, tagged, pushed</text>
+  <rect x="1262" y="72" width="58" height="22" rx="11" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1"/>
+  <text x="1291" y="87.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="11" font-weight="700" fill="#15803d">v0.1.53</text>
+
+  <rect x="672" y="120" width="640" height="84" rx="12" fill="#f3f7fd" stroke="#5b5ff0" stroke-width="1.3"/>
+  <text x="694" y="152" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" font-weight="700"><tspan fill="#15803d">$ </tspan><tspan fill="#0b1220">omc</tspan></text>
+  <text x="694" y="174" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.5" fill="#55607a"># no arguments · environment only · runs from any subdirectory</text>
+  <text x="694" y="192" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.5" fill="#5b5ff0"># stage → diff → describe → sign → commit → tag → push</text>
+
+<circle cx="686" cy="233" r="9" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1.2"/><path d="M682 233l3 3 5.5-6" fill="none" stroke="#15803d" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><text x="706" y="238" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#0b1220">stage all</text><text x="1246" y="238" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" fill="#55607a">git add -A</text><rect x="1262" y="224" width="38" height="19" rx="9.5" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1"/><text x="1281" y="237.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="700" fill="#15803d">OK</text>
+<line x1="686" y1="242" x2="686" y2="263" stroke="#d5ddea" stroke-width="1.4"/>
+<circle cx="686" cy="271" r="9" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1.2"/><path d="M682 271l3 3 5.5-6" fill="none" stroke="#15803d" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><text x="706" y="276" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#0b1220">read diff</text><text x="1246" y="276" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" fill="#55607a">HEAD tree → index</text><rect x="1262" y="262" width="38" height="19" rx="9.5" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1"/><text x="1281" y="275.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="700" fill="#15803d">OK</text>
+<line x1="686" y1="280" x2="686" y2="301" stroke="#d5ddea" stroke-width="1.4"/>
+<circle cx="686" cy="309" r="9" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1.2"/><path d="M682 309l3 3 5.5-6" fill="none" stroke="#15803d" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><text x="706" y="314" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#0b1220">describe</text><text x="1246" y="314" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" fill="#55607a">Ollama → OpenAI → update</text><rect x="1262" y="300" width="38" height="19" rx="9.5" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1"/><text x="1281" y="313.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="700" fill="#15803d">OK</text>
+<line x1="686" y1="318" x2="686" y2="339" stroke="#d5ddea" stroke-width="1.4"/>
+<circle cx="686" cy="347" r="9" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1.2"/><path d="M682 347l3 3 5.5-6" fill="none" stroke="#15803d" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><text x="706" y="352" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#0b1220">sign</text><text x="1246" y="352" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" fill="#55607a">ssh-ed25519 · FIDO2 touch</text><rect x="1262" y="338" width="38" height="19" rx="9.5" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1"/><text x="1281" y="351.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="700" fill="#15803d">OK</text>
+<line x1="686" y1="356" x2="686" y2="377" stroke="#d5ddea" stroke-width="1.4"/>
+<circle cx="686" cy="385" r="9" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1.2"/><path d="M682 385l3 3 5.5-6" fill="none" stroke="#15803d" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><text x="706" y="390" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#0b1220">commit</text><text x="1246" y="390" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" fill="#55607a">7ed5573 · signed</text><rect x="1262" y="376" width="38" height="19" rx="9.5" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1"/><text x="1281" y="389.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="700" fill="#15803d">OK</text>
+<line x1="686" y1="394" x2="686" y2="415" stroke="#d5ddea" stroke-width="1.4"/>
+<circle cx="686" cy="423" r="9" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1.2"/><path d="M682 423l3 3 5.5-6" fill="none" stroke="#15803d" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><text x="706" y="428" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#0b1220">tag</text><text x="1246" y="428" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" fill="#55607a">v0.1.53 · signed</text><rect x="1262" y="414" width="38" height="19" rx="9.5" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1"/><text x="1281" y="427.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="700" fill="#15803d">OK</text>
+<line x1="686" y1="432" x2="686" y2="453" stroke="#d5ddea" stroke-width="1.4"/>
+<circle cx="686" cy="461" r="9" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1.2"/><path d="M682 461l3 3 5.5-6" fill="none" stroke="#15803d" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><text x="706" y="466" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="14" font-weight="600" fill="#0b1220">push</text><text x="1246" y="466" text-anchor="end" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="12" fill="#55607a">origin/main · tags</text><rect x="1262" y="452" width="38" height="19" rx="9.5" fill="#e9f7ee" stroke="#b7e0c4" stroke-width="1"/><text x="1281" y="465.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="10.5" font-weight="700" fill="#15803d">OK</text>
+
+  <line x1="672" y1="500" x2="1312" y2="500" stroke="#e6ebf3" stroke-width="1"/>
+  <text x="672" y="524" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#55607a"><tspan font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="15" font-weight="700" fill="#0b1220">1</tspan> static binary</text>
+  <text x="820" y="524" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#55607a"><tspan font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="15" font-weight="700" fill="#0b1220">0</tspan> flags to remember</text>
+  <text x="992" y="524" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="12.5" fill="#55607a"><tspan font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="15" font-weight="700" fill="#0b1220">7</tspan> steps automated</text>
+  <text x="1180" y="524" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="11.5" fill="#15803d">signed · tagged · pushed</text>
+</g>
+</svg>

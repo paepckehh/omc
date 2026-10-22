@@ -92,6 +92,9 @@ internal/version/     Version string: hardwired semver, overridable via linker -
 docs/branding/        icon (omc-icon.svg), transparent mark (omc-mark.svg),
                       brand sheet (palette, geometry, usage); the icon heads
                       README.md
+docs/hero-dark.svg    dark-theme README banner: brand lockup, value chips,
+docs/hero-light.svg   pipeline dashboard, command box; light twin same layout.
+                      README.md selects them with <picture>/prefers-color-scheme
 docs/screenshots/     terminal captures used by README.md
 ```
 
