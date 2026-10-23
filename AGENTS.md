@@ -95,6 +95,8 @@ docs/branding/        icon (omc-icon.svg), transparent mark (omc-mark.svg),
 docs/hero-dark.svg    dark-theme README banner: brand lockup, value chips,
 docs/hero-light.svg   pipeline dashboard, command box; light twin same layout.
                       README.md selects them with <picture>/prefers-color-scheme
+docs/established-*.svg theme-aware "established" strip under the README nav:
+                      release count, current version, zero-flag promise.
 docs/screenshots/     terminal captures used by README.md; run.svg is a
                       verbatim capture of a real signed run
 ```

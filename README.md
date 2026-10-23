@@ -1,6 +1,12 @@
 <div align="center">
 
-<img src="docs/branding/omc-icon.svg" alt="omc icon: a commit node with a check mark" width="104">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/hero-light.svg">
+  <img src="docs/hero-dark.svg" width="100%" alt="omc hero banner: one command, zero flags, and a dashboard showing stage, diff, describe, sign, commit, tag and push">
+</picture>
+
+<img src="docs/branding/omc-icon.svg" alt="omc icon: a commit node with a check mark" width="96">
 
 # omc
 
@@ -17,31 +23,31 @@ Pure Go, one static binary, no `git` process at runtime.
 [![SSH signed](https://img.shields.io/badge/Commits-SSH_signed-8B5CF6?logo=openssh&logoColor=white)](#-signing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22C55E?logo=opensourceinitiative&logoColor=white)](LICENSE)
 
-[Quick start](#-quick-start) · [Screenshots](#-see-it-run) · [Configuration](#-configuration) · [Agent workflows](#-built-for-agents) · [How it works](#-how-it-works)
+[Quick start](#-quick-start) · [30-second demo](#-30-second-demo) · [See it run](#-see-it-run) · [Configuration](#-configuration) · [Agent workflows](#give-an-agent-commit-rights-not-publish-rights) · [How it works](#-how-it-works)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/established-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/established-light.svg">
+  <img src="docs/established-light.svg" width="100%" alt="omc: established in 2026, 50+ signed releases and counting, one command with zero flags">
+</picture>
 
 </div>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="docs/hero-light.svg">
-  <img src="docs/hero-dark.svg" width="100%" alt="omc hero banner: one command, zero flags, and a dashboard showing stage, diff, describe, sign, commit, tag and push">
-</picture>
-
-The banner is the whole run in one frame: `$ omc` expanded into its seven steps,
-each mapped to the git command it replaces. GitHub picks the variant matching
-your theme; the hand-built SVG stays sharp at any width.
+The hero banner is the whole run in one frame: `$ omc` expanded into its seven
+steps, each mapped to the git command it replaces. GitHub picks the variant
+matching your theme; the hand-built SVG stays sharp at any width.
 
 ---
 
-## ⚡ The whole interface
+## ⚡ The entire API is three letters
 
 ```console
 $ omc
 ```
 
-That is the entire CLI. No subcommands, no flags, no prompts. Every behavior is
-an environment variable, which means it works identically in your shell, in CI,
-and inside an AI coding agent that has no keyboard.
+No subcommands, no flags, no interactive prompts. Every behavior is an
+environment variable, so the same binary works in your shell, in CI, and inside
+an AI coding agent with no keyboard attached.
 
 ```text
 $ omc
@@ -70,13 +76,20 @@ Then, from anywhere inside a git repository:
 omc
 ```
 
-That is already a working commit. Now add the good parts:
+That is already a working commit: staged, messaged, tagged `v0.0.1`, done. Now
+turn on the good parts:
 
 ```console
 export OLLAMA_DESC_URL=http://127.0.0.1:11434   # local AI message
 export OMC_SIGN_KEY_PATH=~/.ssh/id_ed25519      # SSH-signed commit + tag
 export OMC_PUSH_KEY_PATH=~/.ssh/id_ed25519      # push after tagging
 omc
+```
+
+Or run it straight from the module cache, no install step:
+
+```console
+go run paepcke.de/omc/cmd/omc@latest
 ```
 
 Build from source:
@@ -93,7 +106,12 @@ sudo install -m0755 omc /usr/local/bin/
 
 ---
 
-## ✨ Why omc
+## ✨ Why this feels different
+
+Most commit helpers wrap `git` and add flags. `omc` **is** the pipeline: it
+opens the repository, stages the tree, reads the diff, asks a local model,
+signs with your key, writes the objects, bumps the tag and pushes. One binary,
+no shell-outs, nothing half-finished.
 
 <table>
 <tr>
@@ -132,6 +150,45 @@ state, ever.
 </td>
 </tr>
 </table>
+
+---
+
+## 🧾 The receipt every commit leaves behind
+
+A normal commit records *what* changed. An `omc` commit records **what, why,
+who signed it, and which release it belongs to**:
+
+```text
+commit 7ed5573
+Author: you <you@example.com>
+
+    fix: harden login against timing attacks
+
+    Uses constant-time comparison for bearer tokens.
+    Generated locally, reviewed before push.
+
+    gpgsig -----BEGIN SSH SIGNATURE-----
+     U1NIU0lHAAAAAQAAADMAAAALc3NoLWVk...
+     -----END SSH SIGNATURE-----
+
+tag v0.1.55
+Tagger: you <you@example.com>
+
+    fix: harden login against timing attacks
+    -----BEGIN SSH SIGNATURE-----
+     U1NIU0lHAAAAAQAAADMAAAALc3NoLWVk...
+     -----END SSH SIGNATURE-----
+```
+
+Verify any of it with stock git:
+
+```console
+$ git verify-commit HEAD
+$ git tag -v v0.1.55
+```
+
+That is the demo. No dashboards, no service, no lock-in: your existing remote
+and your existing keys already understand all of it.
 
 ---
 
@@ -175,6 +232,27 @@ Field values containing whitespace are quoted, so `grep 'signed=true'`,
 <img src="docs/screenshots/ci.svg" alt="omc non-interactive CI output with structured greppable log records" width="820">
 
 </details>
+
+---
+
+## 🧪 30-second demo
+
+No remote, no config, no key required. Throwaway repo, one file, one command:
+
+```console
+$ mkdir /tmp/omc-demo && cd /tmp/omc-demo && git init -q
+$ echo "hello from omc" > hello.txt
+$ omc
+$ git log --oneline -1 && git tag --sort=-v:refname | head -1
+```
+
+Result: a real commit with a generated message, already tagged `v0.0.1`.
+Add `OMC_SIGN_KEY_PATH` and the same line produces a signature that
+`git verify-commit` accepts. Add `OMC_PUSH_KEY_PATH` and the tag is already on
+your remote before you think to ask.
+
+That is the whole trick: the boring, error-prone part of shipping a change is
+now the *default* behavior of one command.
 
 ---
 
@@ -355,10 +433,11 @@ the upstream tag fetch, and the push.
 
 ---
 
-## 🛡️ Built for agents
+## 🛡️ Give an agent commit rights, not publish rights
 
-The scenario: an AI coding agent should be able to **commit** without being able
-to **publish**.
+Your agent can write code. It should leave a **receipt**, not a force-push.
+Give it a signing key with no push rights: it can author and sign, you review
+the object and publish with your own key.
 
 ```console
 # What the agent gets: sign only.
@@ -440,7 +519,8 @@ flowchart TD
 
 ### Pure Go, no runtime sidecars
 
-Repository discovery, staging, diffs, commits, annotated tags, fetch, push, SSH
+No subprocess, no `git` binary, no `ssh-keygen`, no `notify-send`. Repository
+discovery, staging, diffs, commits, annotated tags, fetch, push, SSH
 signing, D-Bus notifications — all libraries. The only external things `omc`
 talks to are the services you configure: your Ollama/OpenAI endpoint and your
 git remote.
@@ -492,6 +572,8 @@ internal/ollama/       local Ollama backend
 internal/openai/       OpenAI-compatible fallback backend
 internal/output/       structured records, spinner, log groups, touch prompt
 internal/version/      hardwired semver, overridable with -ldflags
+docs/hero-*.svg        theme-aware README hero banner (light/dark)
+docs/established-*.svg theme-aware "established" banner (light/dark)
 docs/branding/         icon, mark and the brand sheet (palette, geometry, rules)
 docs/screenshots/      the terminal captures shown above
 ```
