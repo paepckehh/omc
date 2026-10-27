@@ -284,24 +284,20 @@ func (u *UI) renderGroupHeader() {
 	fmt.Fprintln(u.Err, line)
 }
 
-// EndGroup closes the innermost active log group. On a TTY it prints a blank
-// line as a visual separator when the whole tree closes (so nested groups
-// read as contiguous subtrees); off a TTY it is a no-op. A group whose line
-// budget is exhausted is auto-closed by emit (see emit); EndGroup is for
-// groups closed early or for the outer group when you want the separator.
+// EndGroup closes the innermost active log group. Off a TTY it is a no-op.
+// A group whose line budget is exhausted is auto-closed by emit (see emit);
+// EndGroup is for groups closed early, e.g. when a degrade path skips the
+// records the group was budgeted for. It never writes a separator line:
+// the output contract forbids empty log lines anywhere, so the group tree
+// is closed purely as bookkeeping.
 func (u *UI) EndGroup() {
 	if !u.tty {
 		return
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	popped := false
 	if n := len(u.groups); n > 0 {
 		u.groups = u.groups[:n-1]
-		popped = true
-	}
-	if popped && len(u.groups) == 0 {
-		fmt.Fprintln(u.Err)
 	}
 }
 
@@ -418,6 +414,21 @@ func fieldValue(v string) string {
 	return v
 }
 
+// sanitizeLine collapses every line-breaking rune (\n, \r, \v, \f) in s
+// into a single plain space so a record can never be split across terminal
+// lines: a message with an embedded \n\n would otherwise land as empty log
+// lines in the output, and the output contract forbids empty lines
+// anywhere. Field values do not need this: renderFields quotes any value
+// that carries whitespace or control runes (see fieldValue).
+func sanitizeLine(s string) string {
+	if !strings.ContainsAny(s, "\r\n\v\f") {
+		return s
+	}
+	return strings.Join(strings.FieldsFunc(s, func(r rune) bool {
+		return r == '\r' || r == '\n' || r == '\v' || r == '\f'
+	}), " ")
+}
+
 // emit writes a structured log record to w. level is one of OK/INFO/WARN/FAIL.
 // step is the pipeline step name (may be empty); msg is the human message;
 // fields are optional key=value pairs. The record always carries a leading
@@ -436,6 +447,7 @@ func (u *UI) emit(w io.Writer, level, step, msg string, fields ...Field) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	ts := now()
+	msg = sanitizeLine(msg)
 	fieldStr := u.renderFields(fields)
 	if !u.tty {
 		var b strings.Builder
@@ -471,22 +483,17 @@ func (u *UI) emit(w io.Writer, level, step, msg string, fields ...Field) {
 		// current line, so a group's first line renders ┌─ and its last
 		// └─), then consume one line from every open group and auto-close
 		// groups whose line budget is exhausted. Popping from the top
-		// keeps the remaining stack consistent with the nesting; when the
-		// pops empty the whole tree a separator blank is printed so
-		// groups read as contiguous subtrees.
+		// keeps the remaining stack consistent with the nesting. No
+		// separator blank is printed: the output contract forbids empty
+		// log lines anywhere.
 		fmt.Fprintln(w, u.renderGroupedLine(ts, level, step, msg, fieldStr))
 		for i := range u.groups {
 			if u.groups[i].remaining > 0 {
 				u.groups[i].remaining--
 			}
 		}
-		closed := false
 		for len(u.groups) > 0 && u.groups[len(u.groups)-1].remaining <= 0 {
 			u.groups = u.groups[:len(u.groups)-1]
-			closed = true
-		}
-		if closed && len(u.groups) == 0 {
-			fmt.Fprintln(u.Err)
 		}
 		return
 	}
@@ -848,7 +855,14 @@ func (u *UI) Summary(subject, body string) {
 		u.emit(u.Out, "INFO", "msg", "subject: "+subject)
 		if strings.TrimSpace(body) != "" {
 			u.emit(u.Out, "INFO", "msg", "body:")
-			fmt.Fprintln(u.Out, body)
+			// Blank body lines (LLM output loves paragraph breaks) are
+			// dropped: the flat log must never contain empty lines.
+			for _, line := range strings.Split(body, "\n") {
+				line = strings.TrimSuffix(line, "\r")
+				if strings.TrimSpace(line) != "" {
+					fmt.Fprintln(u.Out, line)
+				}
+			}
 		}
 		return
 	}

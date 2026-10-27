@@ -478,18 +478,107 @@ func TestGroupTreeSingleLine(t *testing.T) {
 	}
 }
 
-func TestEndGroupClosesEarlyAndSeparates(t *testing.T) {
-	ui, _, err := newTestTTYUI()
+func TestEndGroupClosesEarlyWithoutEmptyLine(t *testing.T) {
+	ui, _, errw := newTestTTYUI()
 	ui.BeginGroup("g", 5)
 	ui.Info("one")
 	ui.EndGroup()
 	if len(ui.groups) != 0 {
 		t.Error("EndGroup did not clear the group stack")
 	}
-	got := err.String()
-	// EndGroup prints a trailing blank separator line on a TTY.
-	if !strings.HasSuffix(got, "\n\n") {
-		t.Errorf("EndGroup must print a blank separator, got: %q", got)
+	// EndGroup closes the tree silently: no blank separator line may be
+	// printed, the next record follows directly.
+	got := errw.String()
+	if strings.Contains(got, "\n\n") {
+		t.Errorf("EndGroup printed a blank separator line, got: %q", got)
+	}
+}
+
+// TestNoEmptyLinesAnywhere is the global contract test: NOTHING in the UI,
+// on either path, may ever write an empty line to the terminal. A full
+// representative pipeline flow — nested groups (explicitly closed and
+// auto-closed by their exhausted budget), the step spinner, the two-stage
+// LLM spinner, a touch wait, the file list, results, and the commit-message
+// frame — is rendered through the mini terminal interpreter (renderVT)
+// because what counts is what lands on screen, not the raw byte stream.
+func TestNoEmptyLinesAnywhere(t *testing.T) {
+	for _, tty := range []bool{false, true} {
+		t.Run(map[bool]string{false: "non-tty", true: "tty"}[tty], func(t *testing.T) {
+			var ui *UI
+			var out, errw *bytes.Buffer
+			if tty {
+				ui, out, errw = newTestTTYUI()
+				ui.mu.Lock()
+				ui.animWait = time.Millisecond
+				ui.mu.Unlock()
+			} else {
+				ui, out, errw = newTestUI()
+			}
+
+			ui.Startup("v0.0.0")
+			ui.ConfigNotice([]Field{F("OMC_KEY", "k")}, nil)
+			ui.BeginGroup("📂 preparing repository", 4)
+			_ = ui.Step("open", "detecting repository", func() error { return nil })
+			ui.RepoContextNotice("/tmp/x", "v0.0.1", map[string][]string{"origin": {"s://u"}})
+			ui.EndGroup() // early close, only 2 of 4 budget lines used
+			ui.BeginGroup("💬 message generation", 2)
+			ui.SpinnerStart("ollama", "generating commit message")
+			ui.SpinnerUpdate("condensing to TL;DR")
+			time.Sleep(4 * time.Millisecond)
+			ui.SpinnerStop()
+			ui.Info("generated subject")
+			ui.EndGroup()
+			ui.BeginGroup("📦 committing & publishing", 3)
+			ui.Info("in")  // budget: 1
+			ui.Info("mid") // budget: 2
+			ui.Info("last")
+			// budget exhausted → auto-closed here, no EndGroup call
+			ui.Info("after auto-close")
+			ui.FileList([]string{"a.go", "b.go"})
+			ui.CommitResult("9d3f2ab", true)
+			ui.TagResult("v0.0.2", "9d3f2ab", true)
+			ui.Summary("update", "first line\n\nsecond paragraph\nthird")
+			ui.PushResult("origin", "main", true)
+
+			for name, raw := range map[string]string{"stdout": out.String(), "stderr": errw.String()} {
+				// Raw stream: no consecutive newline may ever appear.
+				if strings.Contains(raw, "\n\n") {
+					t.Errorf("%s stream contains empty lines: %q", name, raw)
+				}
+				// Rendered terminal: no rendered line may be empty. (The
+				// frame's interior blank row is inside box borders, so it
+				// is never an empty rendered line.)
+				for n, line := range renderVT(raw) {
+					if strings.TrimSpace(line) == "" {
+						t.Errorf("%s rendered line %d is empty:\n%s", name, n, strings.Join(renderVT(raw), "\n"))
+						break
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestEmitSanitizesMultiLineMessage keeps a stray newline in a message (an
+// LLM subject, an error string) from splitting a record — and from landing
+// an empty log line — on both paths.
+func TestEmitSanitizesMultiLineMessage(t *testing.T) {
+	for _, tty := range []bool{false, true} {
+		var ui *UI
+		var errw *bytes.Buffer
+		if tty {
+			ui, _, errw = newTestTTYUI()
+		} else {
+			ui, _, errw = newTestUI()
+		}
+		ui.Info("first\n\nsecond")
+		got := errw.String()
+		if strings.Contains(got, "\n\n") {
+			t.Errorf("tty=%v: multi-line message produced empty lines, got: %q", tty, got)
+		}
+		if strings.Count(got, "\n") != 1 {
+			t.Errorf("tty=%v: message split into multiple records, got: %q", tty, got)
+		}
 	}
 }
 

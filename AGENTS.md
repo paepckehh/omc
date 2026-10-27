@@ -125,6 +125,16 @@ its own fresh line; the `internal/output` tests render the raw byte
 stream through a mini terminal interpreter (`renderVT`) to pin both the
 no-stray-empty-lines and the fresh-line-start contracts down.
 
+**Empty lines are forbidden anywhere, TTY or not.** Log groups close
+silently (`EndGroup` and the budget auto-close write no separator line),
+record messages are sanitized so a message with a stray newline can
+never split a record (and its `\n\n` never lands as a blank line), blank
+lines are dropped from the LLM body in the flat log, and the spinner
+erase is newline-free as above. `TestNoEmptyLinesAnywhere` pins the
+whole contract: a full pipeline flow (nested groups, spinners, touch
+wait, file list, results, preview frame) must render without a single
+empty line on either path.
+
 Right after the repository is opened, a `repo` step emits a context
 diagnostic with `dir=` (worktree root), `latest_tag=`, and one
 `<remote>_url=` field per configured remote URL.
