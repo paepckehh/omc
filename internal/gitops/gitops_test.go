@@ -169,6 +169,98 @@ func TestStagedDiff(t *testing.T) {
 	}
 }
 
+// TestStagedDiffSuppressesLockfile pins the lockfile suppression contract:
+// flake.lock content (machine-generated pin hashes, pure noise for an LLM
+// and worse: a huge context burn) never reaches the patch, the file is still
+// listed in fileNames and represented by a one-line stub in the diff, other
+// files keep their full unified diff, and the basename match covers
+// subdirectories.
+func TestStagedDiffSuppressesLockfile(t *testing.T) {
+	repo, wt, dir := initTestRepo(t)
+	lock := "{\n  \"nodes\": {\"nixpkgs\": \"sha256-deadbeef\"}\n}\n"
+	commitFile(t, dir, "flake.lock", lock)
+	commitFile(t, dir, "main.go", "package main\n")
+	if err := os.MkdirAll(filepath.Join(dir, "vendor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(repo, CommitMessage{Subject: "initial"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both a modified root flake.lock and a new nested one.
+	commitFile(t, dir, "flake.lock", strings.ReplaceAll(lock, "deadbeef", "cafebabe"))
+	commitFile(t, dir, "main.go", "package main\n\nfunc main() {}\n")
+	commitFile(t, dir, filepath.Join("vendor", "flake.lock"), "{ \"pins\": {} }\n")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	diff, files, err := StagedDiff(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The lockfiles' content must not leak into the LLM prompt.
+	for _, leak := range []string{"deadbeef", "cafebabe", `"pins"`} {
+		if strings.Contains(diff, leak) {
+			t.Errorf("diff leaked suppressed lockfile content %q:\n%s", leak, diff)
+		}
+	}
+	// Each suppressed file is represented by exactly one stub line.
+	for _, name := range []string{"flake.lock", "vendor/flake.lock"} {
+		if got := strings.Count(diff, name); got < 1 {
+			t.Errorf("diff missing suppressed file %q:\n%s", name, diff)
+		} else if !strings.Contains(diff, name+" updated") {
+			t.Errorf("diff missing stub body for %q:\n%s", name, diff)
+		}
+	}
+	// Non-suppressed files keep their full unified diff.
+	if !strings.Contains(diff, "+func main() {}") {
+		t.Errorf("diff missing real content for main.go:\n%s", diff)
+	}
+	// fileNames still lists every changed file, suppressed ones included.
+	found := map[string]bool{}
+	for _, f := range files {
+		found[f] = true
+	}
+	for _, name := range []string{"flake.lock", "vendor/flake.lock", "main.go"} {
+		if !found[name] {
+			t.Errorf("fileNames missing %q: %v", name, files)
+		}
+	}
+}
+
+// TestStagedDiffRootCommitSuppressesLockfile exercises the same suppression
+// on the root commit, where the diff covers the full tree and there is no
+// HEAD to diff against.
+func TestStagedDiffRootCommitSuppressesLockfile(t *testing.T) {
+	repo, wt, dir := initTestRepo(t)
+	commitFile(t, dir, "flake.lock", "{\n  \"lock\": {\n    \"v\": 1\n  }\n}\n")
+	commitFile(t, dir, "hello.txt", "hello\n")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	diff, files, err := StagedDiff(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(diff, `"lock"`) {
+		t.Errorf("root-commit diff leaked flake.lock content:\n%s", diff)
+	}
+	if !strings.Contains(diff, "flake.lock updated") {
+		t.Errorf("root-commit diff missing flake.lock stub:\n%s", diff)
+	}
+	if !strings.Contains(diff, "+hello") {
+		t.Errorf("root-commit diff missing hello.txt content:\n%s", diff)
+	}
+	if len(files) != 2 {
+		t.Errorf("files = %v, want both entries", files)
+	}
+}
+
 func TestResolveIdentityPriority(t *testing.T) {
 	dir := t.TempDir()
 	repo, err := git.PlainInit(dir, false)

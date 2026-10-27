@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -104,11 +105,42 @@ func StageAll(wt *git.Worktree) error {
 	return nil
 }
 
+// suppressedDiffFiles lists file names whose patch content never reaches
+// the LLM commit-message generation. Lockfiles such as flake.lock are
+// machine-generated pin-hash tables: their diff is thousands of
+// identical-looking JSON hash lines, pure context noise for a model and no
+// help for a commit message. A suppressed file keeps its entry in
+// fileNames (the FileList UI still shows it); only its patch body is
+// replaced by the suppressedPatchStub line.
+var suppressedDiffFiles = []string{"flake.lock"}
+
+// suppressedPatchStub replaces the patch of a suppressed file. %s is the
+// file path; the stub keeps the diff-header shape so it reads as a per-file
+// diff, and the single body line carries the whole message the LLM needs:
+// the file was updated, its content is not shown.
+const suppressedPatchStub = "diff --git a/%s b/%s\n" +
+	"--- a/%s\n" +
+	"+++ b/%s\n" +
+	"@@ content suppressed @@\n" +
+	"%s updated\n"
+
+// isSuppressedDiffFile reports whether the changed file at p has its diff
+// content suppressed (see suppressedDiffFiles). The match is on the base
+// name, case-insensitive, so lockfiles inside subdirectories are covered.
+func isSuppressedDiffFile(p string) bool {
+	base := strings.ToLower(path.Base(p))
+	return slices.ContainsFunc(suppressedDiffFiles, func(name string) bool {
+		return strings.EqualFold(name, base)
+	})
+}
+
 // StagedDiff returns the patch text that will be committed: the difference
 // between HEAD's tree and the current index, as a unified diff. On the root
 // commit the diff covers the full tree. The returned fileNames slice lists
 // the paths touched (post-rename names), suitable as a compact summary for
-// an LLM prompt; it is empty when nothing changed.
+// an LLM prompt; it is empty when nothing changed. Files whose content is
+// suppressed (see suppressedDiffFiles) contribute their fileNames entry and
+// a stub line in the patch, never their content.
 func StagedDiff(repo *git.Repository) (diff string, fileNames []string, err error) {
 	var from *object.Tree
 	if ref, e := repo.Head(); e == nil {
@@ -139,10 +171,7 @@ func StagedDiff(repo *git.Repository) (diff string, fileNames []string, err erro
 		return "", nil, fmt.Errorf("diff HEAD against index: %w", err)
 	}
 
-	patch, err := changes.Patch()
-	if err != nil {
-		return "", nil, fmt.Errorf("build patch: %w", err)
-	}
+	var b strings.Builder
 	for _, ch := range changes {
 		if ch == nil {
 			continue
@@ -154,8 +183,17 @@ func StagedDiff(repo *git.Repository) (diff string, fileNames []string, err erro
 		if name != "" {
 			fileNames = append(fileNames, name)
 		}
+		if isSuppressedDiffFile(name) {
+			fmt.Fprintf(&b, suppressedPatchStub, name, name, name, name, name)
+			continue
+		}
+		p, err := ch.Patch()
+		if err != nil {
+			return "", nil, fmt.Errorf("build patch: %w", err)
+		}
+		b.WriteString(p.String())
 	}
-	return patch.String(), fileNames, nil
+	return b.String(), fileNames, nil
 }
 
 // CommitMessage holds the final subject and body of a commit. The subject is
