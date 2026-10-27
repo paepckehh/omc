@@ -499,6 +499,14 @@ func TestNextSemverTag(t *testing.T) {
 		{"not-a-tag", "v0.0.1"},
 		{"v1.2.3-rc.1", "v1.2.4"},
 		{"1.2.3", "v1.2.4"},
+		{"v0.0.0", "v0.0.1"},
+		{"v0.0.9", "v0.0.10"},
+		{"v0.0.99", "v0.0.100"},
+		{"v9.9.9", "v9.9.10"},
+		{"v0.0.99999999999999999999", "v0.0.100000000000000000000"},
+		{"v99999999999999999999.0.0", "v99999999999999999999.0.1"},
+		{"v0.99999999999999999999.0", "v0.99999999999999999999.1"},
+		{"v0.0.9223372036854775807", "v0.0.9223372036854775808"},
 	}
 	for _, c := range cases {
 		got := NextSemverTag(c.latest)
@@ -554,6 +562,46 @@ func TestNormalizeTag(t *testing.T) {
 		if got != c.want {
 			t.Errorf("NormalizeTag(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestLatestSemverTagOverflowRanking pins the int-overflow bug: a semver
+// component larger than any machine integer used to be parsed with
+// strconv.Atoi, whose error was swallowed to 0. The huge tag then ranked
+// BELOW ordinary tags (here: below v0.0.5), the bump rewound to a name that
+// already existed, and the forced tag push overwrote the real remote tag.
+// Digit-string comparison must rank it above everything smaller.
+func TestLatestSemverTagOverflowRanking(t *testing.T) {
+	repo, wt, dir := initTestRepo(t)
+	commitFile(t, dir, "a.txt", "a")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := Commit(repo, CommitMessage{Subject: "init"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{Name: "Tagger", Email: "tag@example.com"}
+	for _, name := range []string{"v0.0.5", "v0.0.9", "v0.0.99999999999999999999"} {
+		if _, err := CreateTag(repo, h, name, "msg", id); err != nil {
+			t.Fatalf("CreateTag(%s): %v", name, err)
+		}
+	}
+	latest, err := LatestSemverTag(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "v0.0.99999999999999999999"; latest != want {
+		t.Fatalf("latest = %q, want %q (overflow must not demote the huge tag)", latest, want)
+	}
+	next := NextSemverTag(latest)
+	if want := "v0.0.100000000000000000000"; next != want {
+		t.Fatalf("next = %q, want %q (bump must not rewind below the latest)", next, want)
+	}
+	// The bumped name must really be free: creating it succeeds instead of
+	// colliding with the existing huge tag.
+	if _, err := CreateTag(repo, h, next, "bumped", id); err != nil {
+		t.Fatalf("CreateTag(%s): %v", next, err)
 	}
 }
 

@@ -201,6 +201,194 @@ func TestPushToRemoteUpToDateBranchPushesPendingTags(t *testing.T) {
 	}
 }
 
+// TestPushToRemoteNeverOverwritesRemoteTag pins the silent-clobber bug on the
+// pull-failure path: when the pre-tag upstream pull fails, the bump runs on
+// stale local state and can generate a name that already exists upstream.
+// ensureTagAbsent only consults LOCAL refs, so the colliding tag is created
+// locally without error — the old forced tag refspec then overwrote the
+// remote tag without a word. PushToRemote must instead hold the colliding
+// tag back, leave the remote tag untouched, and report the error.
+func TestPushToRemoteNeverOverwritesRemoteTag(t *testing.T) {
+	bare := newRemoteBare(t, "omcnc")
+
+	// Another machine: two commits and a tag v0.0.1, pushed upstream.
+	seed, seedWt, seedDir := initTestRepo(t)
+	if _, err := seed.CreateRemote(&config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{"omcnc://omc/repos/remote.git"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{Name: "Test User", Email: "test@example.com"}
+	if err := os.WriteFile(filepath.Join(seedDir, "seed.txt"), []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedWt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(seed, CommitMessage{Subject: "seed"}); err != nil {
+		t.Fatal(err)
+	}
+	seedHash, err := Commit(seed, CommitMessage{Subject: "seed two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteTag, err := CreateTag(seed, seedHash, "v0.0.1", "seed", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PushToRemote(seed, "", sign.TouchConfig{}); err != nil {
+		t.Fatalf("seed push: %v", err)
+	}
+
+	// This machine cloned before the tag existed (or its upstream tag pull
+	// failed): simulate the stale state by dropping the cloned tag ref.
+	cloneDir := t.TempDir()
+	repo, err := git.PlainClone(cloneDir, false, &git.CloneOptions{
+		URL: "omcnc://omc/repos/remote.git",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Storer.RemoveReference(plumbing.NewTagReferenceName("v0.0.1")); err != nil {
+		t.Fatal(err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cloneDir, "local.txt"), []byte("local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	localHash, err := Commit(repo, CommitMessage{Subject: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The stale bump from zero lands on the same name as the remote tag.
+	localTag, err := CreateTag(repo, localHash, "v0.0.1", "local", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := PushToRemote(repo, "", sign.TouchConfig{})
+	if err == nil {
+		t.Fatal("PushToRemote must fail when the only tag collides with the remote")
+	}
+	if res.Tags {
+		t.Error("Tags = true, want false (nothing was published)")
+	}
+	if len(res.SkippedTags) != 1 || res.SkippedTags[0] != "v0.0.1" {
+		t.Errorf("SkippedTags = %v, want [v0.0.1]", res.SkippedTags)
+	}
+
+	// The remote tag must still point at the other machine's tag object.
+	got, rerr := bare.Storer.Reference(plumbing.NewTagReferenceName("v0.0.1"))
+	if rerr != nil {
+		t.Fatalf("remote tag missing: %v", rerr)
+	}
+	if got.Hash() != remoteTag.Hash() {
+		t.Errorf("remote tag overwritten: %s, want %s", got.Hash(), remoteTag.Hash())
+	}
+	// The branch was still pushed; the local tag still exists locally.
+	assertRemoteRef(t, bare.Storer, plumbing.NewBranchReferenceName("master"), localHash)
+	if got, lerr := repo.Storer.Reference(plumbing.NewTagReferenceName("v0.0.1")); lerr != nil || got.Hash() != localTag.Hash() {
+		t.Errorf("local tag changed: %s err=%v, want %s", got.Hash(), lerr, localTag.Hash())
+	}
+}
+
+// TestPushToRemoteCollisionStillPublishesOtherTags pins the per-tag fallback:
+// a wildcard tag pass that hits one colliding tag aborts as a whole
+// (go-git rejects non-forced non-fast-forward updates client-side), but the
+// non-colliding pending tags must still publish in the same run instead of
+// being stranded until the colliding name is resolved.
+func TestPushToRemoteCollisionStillPublishesOtherTags(t *testing.T) {
+	bare := newRemoteBare(t, "omcpc")
+
+	seed, seedWt, seedDir := initTestRepo(t)
+	if _, err := seed.CreateRemote(&config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{"omcpc://omc/repos/remote.git"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{Name: "Test User", Email: "test@example.com"}
+	if err := os.WriteFile(filepath.Join(seedDir, "seed.txt"), []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedWt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	seedHash, err := Commit(seed, CommitMessage{Subject: "seed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteTag, err := CreateTag(seed, seedHash, "v0.0.1", "seed", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PushToRemote(seed, "", sign.TouchConfig{}); err != nil {
+		t.Fatalf("seed push: %v", err)
+	}
+
+	// Local: a clone that does not know the upstream v0.0.1 (stale tag
+	// state) plus a fresh, free v0.0.5 on a new commit.
+	cloneDir := t.TempDir()
+	repo, err := git.PlainClone(cloneDir, false, &git.CloneOptions{
+		URL: "omcpc://omc/repos/remote.git",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Storer.RemoveReference(plumbing.NewTagReferenceName("v0.0.1")); err != nil {
+		t.Fatal(err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cloneDir, "local.txt"), []byte("local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	localHash, err := Commit(repo, CommitMessage{Subject: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateTag(repo, localHash, "v0.0.1", "stale bump", id); err != nil {
+		t.Fatal(err)
+	}
+	freeTag, err := CreateTag(repo, localHash, "v0.0.5", "free", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := PushToRemote(repo, "", sign.TouchConfig{})
+	if err != nil {
+		t.Fatalf("PushToRemote must degrade, not fail: %v", err)
+	}
+	if !res.Tags {
+		t.Error("Tags = false, want true (the free tag was published)")
+	}
+	if len(res.SkippedTags) != 1 || res.SkippedTags[0] != "v0.0.1" {
+		t.Errorf("SkippedTags = %v, want [v0.0.1]", res.SkippedTags)
+	}
+
+	// Remote: the colliding tag untouched, the free tag published.
+	got, rerr := bare.Storer.Reference(plumbing.NewTagReferenceName("v0.0.1"))
+	if rerr != nil {
+		t.Fatalf("remote v0.0.1 missing: %v", rerr)
+	}
+	if got.Hash() != remoteTag.Hash() {
+		t.Errorf("remote v0.0.1 overwritten: %s, want %s", got.Hash(), remoteTag.Hash())
+	}
+	assertRemoteRef(t, bare.Storer, plumbing.NewTagReferenceName("v0.0.5"), freeTag.Hash())
+}
+
 // newRemoteBare creates a bare repo and routes the given protocol to an
 // in-process server that serves that repo's storage, so pushes never touch
 // the network or a git binary.

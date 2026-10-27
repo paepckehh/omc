@@ -480,6 +480,16 @@ func pushPhase(ui *output.UI, repo *git.Repository, cfg config.Config, touchCfg 
 		res, perr = gitops.PushToRemote(repo, cfg.PushKeyPath, touchCfg.For("the push"))
 		return perr
 	})
+	// Degrade per skipped tag, never block: a tag held back here collided
+	// with a same-named remote tag pointing at a different object (stale
+	// local tag state after a failed upstream tag pull, or another machine
+	// pushed the same name meanwhile). The remote tag was left untouched;
+	// the local tag stays local. The warning is emitted on both the
+	// degraded-success and the error path, so the held-back name is always
+	// visible.
+	for _, name := range res.SkippedTags {
+		ui.Warn("tag %s exists on the remote pointing elsewhere; left the remote tag untouched", name)
+	}
 	if err != nil {
 		return res, err
 	}

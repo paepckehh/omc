@@ -57,7 +57,9 @@ developer contract.
   log a warning and leave the commit and tag local (never rolled back).
   The pre-tag upstream tag pull (`gitops.PullTags`) is best-effort too: a
   repo without a remote has nothing to pull, and a failed pull only warns —
-  the tag is then bumped from the local tag state.
+  the tag is then bumped from the local tag state, and the push-side
+  collision guard (see "Auto semver tagging") makes that degrade loudly
+  instead of clobbering the upstream tag.
   Not being in a repo is an error.
 - **Pure Go, single static binary.** Any new dependency must be pure Go.
 
@@ -69,10 +71,14 @@ cmd/omc/main.go       pipeline: repo → stage → diff → (overrides|llm) → 
 internal/config/      config.FromEnv() reads the env vars
 internal/gitops/      PlainOpen, StageAll, StagedDiff, Commit, SignedCommit,
                       ResolveIdentity, Scout, index→tree writer,
-                      LatestSemverTag, NextSemverTag, CreateTag, SignedTag,
+                      LatestSemverTag, NextSemverTag (digit-string semver,
+                      overflow-proof), CreateTag, SignedTag,
                       ValidSemverTag, NormalizeTag, PullTags (upstream tag
-                      pull, git fetch --tags), PushToRemote; both accept a
-                      sign.TouchConfig so their SSH auth is touch-bounded
+                      pull, git fetch --tags), PushToRemote + pushTags
+                      (tag pass that never rewrites an existing remote tag;
+                      reports held-back names in PushResult.SkippedTags);
+                      both accept a sign.TouchConfig so their SSH auth is
+                      touch-bounded
 internal/sign/        sign.Load, sign.SecurityKeySigner, signer.Sign → armored SSH sig;
                       FIDO2 detection & agent delegation (DetectKind, IsSecurityKeyPath, HandleMatches);
                       WrapTouch wraps every agent signature with the touch
@@ -180,22 +186,59 @@ sanity-check the config with `goreleaser check` or a
 ## Auto semver tagging
 
 After every successful commit, `omc` tags that commit with a semver tag.
-Before any tag name is generated, the pipeline pulls the upstream tag state
-(`gitops.PullTags`, the go-git equivalent of `git fetch --tags` against the
-default remote, authenticated with the push key on SSH remotes) so the
-bump can never collide with a tag that already exists upstream.
 If `OMC_TAG` is set and parses as strict semver, that name (normalized
 with a leading `v`) is used verbatim; otherwise the auto-bump path scans
 all valid `refs/tags/v*.*.*` refs (pre-release/build suffixes use their
 base version, malformed trailing segments are ignored) and bumps the patch
-segment. The pull itself is
-a smartcard touch wait when the push key is an FIDO2 handle on an SSH
-remote: prompted and bounded through the same touch policy as everything
-else, and a timeout still degrades (warn, local tag state). When no prior
-tag exists, the first tag is `v0.0.1`. The tag is annotated and
-SSH-signed with the same key used for the commit when a signer is
-available. If the tag step fails, `omc` logs a warning and exits 0; the
-commit is never rolled back.
+segment. When no prior tag exists, the first tag is `v0.0.1`. The tag is
+annotated and SSH-signed with the same key used for the commit when a
+signer is available. If the tag step fails, `omc` logs a warning and
+exits 0; the commit is never rolled back.
+
+### Tag sync invariants (bug hunt v0.1.62)
+
+The pull → bump → create → push sequence is fail-proof against every
+failure mode found in the hunt; the guards are pinned by tests in
+`internal/gitops/push_test.go`, `internal/gitops/gitops_test.go`, and
+`cmd/omc/main_push_test.go`:
+
+1. **Fresh state first (upstream pull).** Before any tag name is
+   generated, the pipeline pulls the upstream tag state (`gitops.PullTags`,
+   the go-git equivalent of `git fetch --tags` against the default remote,
+   authenticated with the push key on SSH remotes; a smartcard touch wait
+   when the push key is an FIDO2 handle — prompted and bounded through the
+   same touch policy, a timeout degrades to warn + local tag state). After
+   a successful pull every local tag either matches the remote or is new
+   on it, so the subsequent tag push is provably collision-free.
+2. **Bump never rewinds (overflow-proof semver).** Components are compared
+   and bumped as decimal digit strings, never `strconv.Atoi`: a component
+   larger than any machine integer (`v0.0.99999999999999999999`) used to
+   parse as 0, which misranked the tag and made the "next" tag rewind to
+   an existing name (or wrap to a negative value). Now the successor is
+   exact (`…99999` → `…00000` with the carry).
+3. **Remote tags are never silently overwritten.** `ensureTagAbsent`
+   (CreateTag/Signing) only guards LOCAL refs, so a failed upstream pull
+   can still produce a colliding name. The push's tag pass is therefore
+   non-forced, exactly like `git push --tags` (git also refuses to move a
+   tag without `--force`): go-git rejects the collision client-side while
+   building the request, aborting the whole wildcard pass — so
+   `gitops.pushTags` retries per tag on that failure, holding back only
+   the colliding name (`PushResult.SkippedTags`; the pipeline warns per
+   tag: "exists on the remote pointing elsewhere; left the remote tag
+   untouched") while every other pending tag still publishes. The old
+   forced refspec (`+refs/tags/*:refs/tags/*`) silently clobbered the
+   upstream tag in exactly this case. The per-tag retry costs one extra
+   session per local tag but only ever runs in the collision case, never
+   on the happy path (one wildcard session = one smartcard touch).
+4. **Residual race, documented.** A tag appearing on the remote between
+   the pull and the push advertisement is caught by the advertisement
+   itself (guard 3). Only a change inside the same push session could
+   still slip through — inherent to the git wire protocol without
+   force-with-lease, which go-git supports for branches only.
+
+The clean-tree push path (`pushNothing`) routes through the same
+`pushPhase`/`PushToRemote`, so stranded local tags get the same protection
+without a preceding pull.
 
 ## Commit message format
 

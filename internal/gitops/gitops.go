@@ -570,6 +570,11 @@ func NormalizeTag(name string) string {
 // LatestSemverTag scans all refs under refs/tags/ and returns the highest
 // semver tag name (including the leading "v"). When no semver tag exists it
 // returns "" and a nil error; the caller then bumps the zero version.
+//
+// Components are compared as digit strings, never parsed into ints, so a
+// component larger than any machine integer (v0.0.99999999999999999999)
+// still ranks and bumps correctly: an int parse would silently yield 0 and
+// make the "next" tag rewind to a version that already exists.
 func LatestSemverTag(repo *git.Repository) (string, error) {
 	iter, err := repo.Tags()
 	if err != nil {
@@ -578,14 +583,14 @@ func LatestSemverTag(repo *git.Repository) (string, error) {
 	defer iter.Close()
 
 	var bestRaw string
-	var best [3]int
+	var best [3]string
 	err = iter.ForEach(func(ref *plumbing.Reference) error {
 		name := strings.TrimPrefix(ref.Name().String(), "refs/tags/")
 		m := semverRe.FindStringSubmatch(name)
 		if m == nil {
 			return nil
 		}
-		v := [3]int{mustAtoi(m[1]), mustAtoi(m[2]), mustAtoi(m[3])}
+		v := [3]string{m[1], m[2], m[3]}
 		if bestRaw == "" || semverLess(best, v) {
 			best, bestRaw = v, name
 		}
@@ -598,16 +603,32 @@ func LatestSemverTag(repo *git.Repository) (string, error) {
 }
 
 // NextSemverTag returns the next patch-bumped semver tag for the given latest
-// tag. An empty latest means no prior tag exists; the result is v0.0.1.
+// tag. An empty latest means no prior tag exists; the result is v0.0.1. The
+// patch segment is incremented as a decimal digit string, so a value beyond
+// any machine integer (v0.0.99999999999999999999) still bumps to the exact
+// successor instead of overflowing, rewinding, or emitting a negative
+// component.
 func NextSemverTag(latest string) string {
 	m := semverRe.FindStringSubmatch(latest)
 	if m == nil {
 		return "v0.0.1"
 	}
-	major, _ := strconv.Atoi(m[1])
-	minor, _ := strconv.Atoi(m[2])
-	patch, _ := strconv.Atoi(m[3])
-	return fmt.Sprintf("v%d.%d.%d", major, minor, patch+1)
+	return "v" + m[1] + "." + m[2] + "." + bumpDigits(m[3])
+}
+
+// bumpDigits returns digits incremented by one as a decimal digit string
+// without leading zeros ("0" → "1", "9" → "10", "999" → "1000", and any
+// arbitrarily long run of nines carries exactly).
+func bumpDigits(digits string) string {
+	b := []byte(digits)
+	for i := len(b) - 1; i >= 0; i-- {
+		if b[i] < '9' {
+			b[i]++
+			return string(b)
+		}
+		b[i] = '0'
+	}
+	return "1" + string(b)
 }
 
 // CreateTag creates an annotated tag pointing at hash, using message as the
@@ -724,20 +745,27 @@ func storeTagObject(repo *git.Repository, content []byte) (plumbing.Hash, error)
 
 // --- semver helpers ----------------------------------------------------------
 
-func mustAtoi(s string) int {
-	v, _ := strconv.Atoi(s)
-	return v
-}
-
-// semverLess reports whether a is strictly older than b.
-func semverLess(a, b [3]int) bool {
+// semverLess reports whether a is strictly older than b. Components are
+// digit strings (the regex guarantees no leading zeros), so comparison by
+// length first and lexicographic order second is exact numeric order for
+// arbitrarily large components.
+func semverLess(a, b [3]string) bool {
 	if a[0] != b[0] {
-		return a[0] < b[0]
+		return digitLess(a[0], b[0])
 	}
 	if a[1] != b[1] {
-		return a[1] < b[1]
+		return digitLess(a[1], b[1])
 	}
-	return a[2] < b[2]
+	return digitLess(a[2], b[2])
+}
+
+// digitLess reports whether the decimal digit string a (no leading zeros)
+// is numerically less than b.
+func digitLess(a, b string) bool {
+	if len(a) != len(b) {
+		return len(a) < len(b)
+	}
+	return a < b
 }
 
 // --- Push to the remote -------------------------------------------------------
@@ -750,6 +778,11 @@ type PushResult struct {
 	Branch string
 	// Tags reports whether the tags were pushed.
 	Tags bool
+	// SkippedTags lists local tags that were NOT pushed because the remote
+	// already has the same tag name pointing at a different object. The
+	// remote tag is left untouched (omc never rewrites an existing remote
+	// tag); the local tag stays local and callers warn about it.
+	SkippedTags []string
 }
 
 // ErrNoRemoteConfigured is returned when the repository has no remote to
@@ -801,8 +834,11 @@ func defaultRemoteConfig(repo *git.Repository) (*config.RemoteConfig, error) {
 // up-to-date branch does not stop the tag pass: pending local tags (a
 // previous run whose tag push failed) are exactly what the tag pass is
 // there to publish.
-// ErrForceNeeded / non-fast-forward errors from the tag pass are returned
-// as errors; the branch push itself already succeeded at that point.
+//
+// The tag pass never overwrites a remote tag that already points somewhere
+// else (see pushTags); tags that would collide are skipped and reported in
+// PushResult.SkippedTags, so a failed or skipped upstream tag pull can no
+// longer turn a stale bump into a silent remote-tag clobber.
 func PushToRemote(repo *git.Repository, keyPath string, touchCfg sign.TouchConfig) (PushResult, error) {
 	// Prefer "origin", like git; otherwise the lexicographically first
 	// remote that has URLs (see defaultRemoteConfig).
@@ -833,31 +869,133 @@ func PushToRemote(repo *git.Repository, keyPath string, touchCfg sign.TouchConfi
 		return PushResult{}, err
 	}
 
-	// Second pass mirrors "git push --tags": update every refs/tags/*
-	// that exists locally. Like git, the tag refspec is forced, so a
-	// remote tag that already points elsewhere is updated. It also runs
-	// when the branch was already up-to-date: a prior run may have pushed
-	// the branch but failed the tag pass, leaving pending local tags that
-	// only this pass publishes.
-	if err := pushOnce(repo, remoteCfg, &git.PushOptions{
-		RemoteName: remoteCfg.Name,
-		Auth:       auth,
-		RefSpecs:   []config.RefSpec{config.RefSpec("+refs/tags/*:refs/tags/*")},
-	}); err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+	// Second pass mirrors "git push --tags" without --force: every local
+	// refs/tags/* is pushed, but a remote tag that already points elsewhere
+	// is never rewritten (see pushTags for the collision protocol). It also
+	// runs when the branch was already up-to-date: a prior run may have
+	// pushed the branch but failed the tag pass, leaving pending local tags
+	// that only this pass publishes.
+	skipped, terr := pushTags(repo, remoteCfg, auth)
+	if terr != nil {
 		return PushResult{
-			Remote: remoteCfg.Name,
-			Branch: branch,
-			Tags:   false,
-		}, fmt.Errorf("push tags: %w", err)
+			Remote:      remoteCfg.Name,
+			Branch:      branch,
+			Tags:        false,
+			SkippedTags: skipped,
+		}, fmt.Errorf("push tags: %w", terr)
 	}
 
-	return PushResult{Remote: remoteCfg.Name, Branch: branch, Tags: true}, nil
+	return PushResult{
+		Remote:      remoteCfg.Name,
+		Branch:      branch,
+		Tags:        true,
+		SkippedTags: skipped,
+	}, nil
 }
 
 // pushOnce runs a single push operation through the Remote abstraction.
 func pushOnce(repo *git.Repository, cfg *config.RemoteConfig, opts *git.PushOptions) error {
 	remote := git.NewRemote(repo.Storer, cfg)
 	return remote.PushContext(context.Background(), opts)
+}
+
+// pushTags publishes every local tag to the remote, exactly like "git push
+// --tags" — without --force. The fast path is a single non-forced wildcard
+// pass: tags the remote lacks are created, tags that already match are
+// no-ops, and the whole pass is one session (one smartcard touch when the
+// push key is an FIDO2 handle).
+//
+// A local tag whose name already exists on the remote pointing at a
+// different object is never pushed over it. go-git rejects such a
+// non-forced update while building the request, which aborts the whole
+// wildcard pass before a single command is sent — so on any wildcard
+// failure the tags are retried one by one: the colliding names are skipped
+// (the remote tag stays untouched), every other pending tag still
+// publishes, and the skipped names are returned for the caller to warn
+// about. This is what makes the pre-tag upstream pull fail-proof: when
+// PullTags fails and the bump runs on stale local state, a colliding tag
+// name now degrades loudly instead of silently overwriting the upstream
+// tag (which the old forced refspec did).
+//
+// The per-tag retry costs one extra session per local tag, but it only runs
+// in the collision case, never on the happy path. The residual race — the
+// remote gaining a tag between the pull and the push advertisement — is
+// closed too, because the advertisement itself reveals the collision; only
+// a change inside the same push session could still slip through, which is
+// inherent to the git protocol without force-with-lease (go-git supports
+// that for branches only).
+func pushTags(repo *git.Repository, cfg *config.RemoteConfig, auth transport.AuthMethod) (skipped []string, err error) {
+	err = pushOnce(repo, cfg, &git.PushOptions{
+		RemoteName: cfg.Name,
+		Auth:       auth,
+		RefSpecs:   []config.RefSpec{config.RefSpec("refs/tags/*:refs/tags/*")},
+	})
+	if err == nil || errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return nil, nil
+	}
+
+	// The wildcard pass failed: almost always a collision (a local tag
+	// whose name the remote already has at a different hash), which
+	// go-git turns into an abort of the entire pass. Retry per tag so only
+	// the colliding name is held back.
+	names, ierr := sortedTagNames(repo)
+	if ierr != nil {
+		return nil, err
+	}
+	published := 0
+	var firstErr error
+	for _, name := range names {
+		rn := plumbing.NewTagReferenceName(name).String()
+		terr := pushOnce(repo, cfg, &git.PushOptions{
+			RemoteName: cfg.Name,
+			Auth:       auth,
+			RefSpecs:   []config.RefSpec{config.RefSpec(rn + ":" + rn)},
+		})
+		switch {
+		case terr == nil, errors.Is(terr, git.NoErrAlreadyUpToDate):
+			published++
+		default:
+			skipped = append(skipped, name)
+			if firstErr == nil {
+				firstErr = terr
+			}
+		}
+	}
+	switch {
+	case len(skipped) == 0:
+		// Every tag went through individually; the wildcard failure was
+		// transient. Report success — everything the caller asked for is
+		// published.
+		return nil, nil
+	case published > 0:
+		// Degrade: the colliding tags stay local, the rest is published.
+		return skipped, nil
+	default:
+		// Nothing published at all — surface the error, with the
+		// held-back names so a grep of the warning names the tag.
+		return skipped, fmt.Errorf("no tag pushed; held back: %s: %w", strings.Join(skipped, ", "), firstErr)
+	}
+}
+
+// sortedTagNames returns the names of all refs/tags/* in the repository in
+// sorted order, so the per-tag push retry is deterministic.
+func sortedTagNames(repo *git.Repository) ([]string, error) {
+	iter, err := repo.Tags()
+	if err != nil {
+		return nil, fmt.Errorf("list tags: %w", err)
+	}
+	defer iter.Close()
+	var names []string
+	if err := iter.ForEach(func(ref *plumbing.Reference) error {
+		if ref.Type() == plumbing.HashReference {
+			names = append(names, strings.TrimPrefix(ref.Name().String(), "refs/tags/"))
+		}
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("iterate tags: %w", err)
+	}
+	slices.Sort(names)
+	return names, nil
 }
 
 // PullTags fetches the default remote's refs into the local repository, the
