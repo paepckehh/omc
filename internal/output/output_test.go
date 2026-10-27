@@ -742,55 +742,132 @@ func TestEmitGroupedKeepsTokens(t *testing.T) {
 	}
 }
 
-// TestSpinnerStopStartsNextRecordOnFreshLine is the regression test for the
-// LLM generation spinner: the live spinner rewrites its line with \r and no
-// trailing newline, so SpinnerStop must erase the frame AND terminate the
-// line. Without the terminator the next log record (the commit-message
-// preview emitted right after the AI message/TL;DR phases) is stitched
-// directly onto the spinner's line instead of starting on its own.
-func TestSpinnerStopStartsNextRecordOnFreshLine(t *testing.T) {
+// ansiCSI matches one CSI escape sequence at the start of a raw terminal
+// stream: an ESC [ , optional parameter bytes, and a single final letter.
+// Color sequences (final letter m) carry no printable text; K is the erase
+// sequence the spinner and countdown use to clear their line.
+var ansiCSI = regexp.MustCompile("^\x1b\\[[0-9;:]*[A-Za-z]")
+
+// timestampLine matches a rendered line that starts with the structured
+// record timestamp (HH:MM:SS) at column zero.
+var timestampLine = regexp.MustCompile(`^\d\d:\d\d:\d\d `)
+
+// renderVT interprets a raw terminal byte stream the way a real terminal
+// emulator does, keeping every line as plain text: "\r" returns the cursor to
+// column 0, ESC[K erases from the cursor to the end of the line, "\n" moves
+// one line down, and everything that carries no visible text (color escape
+// sequences, the bell) is dropped. It returns the rendered screen lines so
+// tests can assert on what a user actually sees in a terminal instead of on
+// the raw byte stream, where \r-separated spinner frames do not look like
+// what lands on screen. The final not-yet-written cursor line after the last
+// "\n" is terminal state, not output, so it is dropped.
+func renderVT(raw string) []string {
+	lines := []string{""}
+	row, col := 0, 0
+	for i := 0; i < len(raw); {
+		switch c := raw[i]; c {
+		case '\r':
+			col = 0
+			i++
+		case '\n':
+			row++
+			col = 0
+			for row >= len(lines) {
+				lines = append(lines, "")
+			}
+			i++
+		case '\a', '\x1b':
+			// The bell carries no text; escape sequences are matched
+			// below and only the erase (K) has a visible effect.
+			if c == '\x1b' {
+				if m := ansiCSI.FindString(raw[i:]); m != "" {
+					if strings.HasSuffix(m, "K") {
+						lines[row] = lines[row][:col]
+					}
+					i += len(m)
+					continue
+				}
+			}
+			i++
+		default:
+			for col+1 > len(lines[row]) {
+				lines[row] += " "
+			}
+			lines[row] = lines[row][:col] + string(c) + lines[row][col+1:]
+			col++
+			i++
+		}
+	}
+	if len(lines) > 1 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+// TestSpinnerStopNoEmptyLines regression-tests the empty-line contract of
+// the animated spinner: SpinnerStop must erase the frame in place and must
+// NOT terminate the line. A trailing newline leaves the erased frame line
+// in the terminal as a stray empty line — one per spinner stop, so a full
+// pipeline run (every Step runs a spinner) scattered blank lines through the
+// log. The whole rendered screen must stay blank-free.
+func TestSpinnerStopNoEmptyLines(t *testing.T) {
 	ui, _, errw := newTestTTYUI()
+	ui.mu.Lock()
+	ui.animWait = time.Millisecond
+	ui.mu.Unlock()
 
-	ui.SpinnerStart("ollama", "generating commit message")
-	ui.SpinnerUpdate("condensing to TL;DR")
-	ui.SpinnerStop()
-	ui.Info("next structured record")
+	ui.Info("first record")
+	for range 3 {
+		ui.SpinnerStart("ollama", "generating commit message")
+		ui.SpinnerUpdate("condensing to TL;DR")
+		time.Sleep(4 * time.Millisecond) // let a few frames paint
+		ui.SpinnerStop()
+		ui.Info("record after stop")
+	}
+	_ = ui.Step("stage", "staging all changes", func() error { return nil })
 
-	got := errw.String()
-	if !strings.Contains(got, "\r\033[K\n") {
-		t.Fatalf("SpinnerStop must erase the frame and terminate the line, got: %q", got)
-	}
-	// The record emitted after the stop must begin at the start of a line:
-	// everything between the stop's terminating newline and the record's
-	// timestamp must be only the timestamp prefix, with no spinner frame
-	// residue stitched in front of the record.
-	idx := strings.Index(got, "next structured record")
-	if idx < 0 {
-		t.Fatalf("INFO record missing from output: %q", got)
-	}
-	stopIdx := strings.LastIndex(got[:idx], "\r\033[K\n")
-	if stopIdx < 0 {
-		t.Fatalf("no terminated spinner line before the record, got: %q", got)
-	}
-	between := got[stopIdx+len("\r\033[K\n") : idx]
-	if !regexp.MustCompile(`^\d\d:\d\d:\d\d `).MatchString(between) {
-		t.Fatalf("record after SpinnerStop is stitched to the spinner line, residue: %q", between)
+	rendered := renderVT(errw.String())
+	for n, line := range rendered {
+		if strings.TrimSpace(line) == "" {
+			t.Fatalf("spinner stop left empty line %d in the rendered terminal:\n%s", n, strings.Join(rendered, "\n"))
+		}
 	}
 }
 
-// TestSpinnerStopNoEmptyLines ensures the fresh-line terminator never
-// produces stray empty lines in the structured log stream: a record must
-// follow directly on the terminated line, not after a pile of blank lines.
-func TestSpinnerStopNoEmptyLines(t *testing.T) {
+// TestSpinnerStopStartsNextRecordOnFreshLine keeps the fresh-line contract:
+// the record emitted right after SpinnerStop (the commit-message preview
+// lands right after the AI detail/TL;DR phases) must start at the start of
+// its own rendered line, with no spinner frame residue stitched in front of
+// it. The stop erases the frame and leaves the cursor at column 0, so the
+// next record overwrites the frame's line; asserting on the rendered screen
+// (renderVT) proves the record never rides on a spinner tail.
+func TestSpinnerStopStartsNextRecordOnFreshLine(t *testing.T) {
 	ui, _, errw := newTestTTYUI()
+	ui.mu.Lock()
+	ui.animWait = time.Millisecond
+	ui.mu.Unlock()
+
+	ui.Info("first record")
 	ui.SpinnerStart("ollama", "generating commit message")
+	ui.SpinnerUpdate("condensing to TL;DR")
+	time.Sleep(4 * time.Millisecond) // let a few frames paint
 	ui.SpinnerStop()
-	ui.Info("record after stop")
-	got := errw.String()
-	// Exactly one newline terminates the spinner line; the record follows
-	// on the same logical line, so there must be no blank line between.
-	if strings.Contains(got, "\r\033[K\n\n") {
-		t.Fatalf("spinner stop introduced an empty line, got: %q", got)
+	ui.Info("next structured record")
+
+	recordLine := ""
+	for _, line := range renderVT(errw.String()) {
+		if strings.Contains(line, "next structured record") {
+			recordLine = line
+			break
+		}
+	}
+	if recordLine == "" {
+		t.Fatalf("record missing from the rendered terminal: %q", errw.String())
+	}
+	// The record's timestamp must be the first thing on its rendered line:
+	// anything else in front of it is spinner residue stitched to it.
+	if !timestampLine.MatchString(recordLine) {
+		t.Fatalf("record after SpinnerStop is stitched to spinner residue, rendered line: %q", recordLine)
 	}
 }
 

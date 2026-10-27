@@ -116,6 +116,14 @@ tokens (`OK`, `INFO`, `WARN`, `FAIL`, step names) are always intact so
 consumers can grep regardless of TTY mode. Field values that contain
 whitespace, quotes, or non-printable runes are quoted (Go `strconv.Quote`
 syntax) so every record stays a single space-separated token per field.
+Animated lines (step spinners, touch countdowns) rewrite their line in
+place with `\r` and erase it with `\r ESC[K` when they stop; the erase is
+never terminated with a newline — that would leave the erased line in
+the terminal as a stray empty line, one per spinner stop. The next
+record overwrites the erased line instead and so starts at the start of
+its own fresh line; the `internal/output` tests render the raw byte
+stream through a mini terminal interpreter (`renderVT`) to pin both the
+no-stray-empty-lines and the fresh-line-start contracts down.
 
 Right after the repository is opened, a `repo` step emits a context
 diagnostic with `dir=` (worktree root), `latest_tag=`, and one

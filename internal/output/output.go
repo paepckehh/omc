@@ -712,10 +712,13 @@ func (u *UI) stopSpinner() {
 	close(u.animCtx)
 	u.animCtx = nil
 	u.anim = nil
-	// Erase the spinner frame and terminate the line: without the trailing
-	// newline the next record (or the next writer to the shared terminal)
-	// would attach to the spinner's line instead of starting its own.
-	fmt.Fprint(u.Err, "\r\033[K\n")
+	// Erase the spinner frame and leave the cursor at the start of the
+	// erased line. No trailing newline: the erased frame line would stay in
+	// the terminal as a stray empty line (one per spinner stop, so a full
+	// pipeline run scattered blank lines through the log). The next
+	// structured record instead overwrites the erased line and thus starts
+	// at the start of its own fresh line.
+	fmt.Fprint(u.Err, "\r\033[K")
 	u.mu.Unlock()
 }
 
