@@ -321,10 +321,12 @@ Large diffs are truncated per file section (200 lines triggers a 100-line cut,
 keeping the header and both ends), so one generated file cannot eat the model's
 context window.
 
-Lockfiles are never sent: `flake.lock` is machine-generated pin-hash noise —
-pointless context for a model and no help for a commit message. A changed
-lockfile appears in the diff as a single stub line (`flake.lock updated`,
-content suppressed) and in the changed-file list, and nothing more.
+Lockfiles are never sent to the model: `flake.lock` is machine-generated pin-hash
+noise — a large list of hashes that trips the AI and no help for a commit
+message. In the prompt's diff a changed lockfile is replaced by a single stub
+line (`flake.lock updated`, content suppressed); it keeps its entry in the
+changed-file list. The lockfile itself is staged and committed byte-for-byte
+like any other file — only the AI analysis is spared.
 
 <details>
 <summary><b>🔒 Local-first by default</b></summary>

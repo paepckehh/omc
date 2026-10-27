@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -230,6 +231,89 @@ func TestStagedDiffSuppressesLockfile(t *testing.T) {
 		if !found[name] {
 			t.Errorf("fileNames missing %q: %v", name, files)
 		}
+	}
+}
+
+// TestLockfileCommittedInFullButSuppressedFromPrompt pins the whole point of
+// the suppression: the AI prompt never sees the lockfile content (the hash
+// list trips models), but the lockfile itself is staged and committed
+// byte-identical to the working tree. A lockfile-only change must also count
+// as a real change: the stub keeps the diff non-empty so the pipeline never
+// treats it as a clean tree and skips the commit.
+func TestLockfileCommittedInFullButSuppressedFromPrompt(t *testing.T) {
+	repo, wt, dir := initTestRepo(t)
+	commitFile(t, dir, "main.go", "package main\n")
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Commit(repo, CommitMessage{Subject: "initial"}); err != nil {
+		t.Fatal(err)
+	}
+
+	lock := `{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "narHash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "lastModified": 1730000000,
+        "rev": "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        "type": "github"
+      }
+    }
+  },
+  "root": "nixpkgs",
+  "version": 7
+}
+`
+	commitFile(t, dir, "flake.lock", lock)
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	// What the AI sees: the stub, never the content.
+	diff, files, err := StagedDiff(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"AAAA", "narHash", "nixpkgs", `"version": 7`} {
+		if strings.Contains(diff, leak) {
+			t.Errorf("LLM prompt diff leaked lockfile content %q:\n%s", leak, diff)
+		}
+	}
+	if !strings.Contains(diff, "flake.lock updated") {
+		t.Errorf("LLM prompt diff missing the flake.lock stub:\n%s", diff)
+	}
+	if !slices.Contains(files, "flake.lock") {
+		t.Errorf("fileNames missing flake.lock: %v", files)
+	}
+	// A lockfile-only change is a real change, not a clean tree.
+	if strings.TrimSpace(diff) == "" {
+		t.Error("lockfile-only diff is empty; the pipeline would skip the commit")
+	}
+
+	// What git stores: the full lockfile, byte-identical.
+	h, err := Commit(repo, CommitMessage{Subject: "update flake.lock"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := repo.CommitObject(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := tree.File("flake.lock")
+	if err != nil {
+		t.Fatalf("flake.lock missing from the committed tree: %v", err)
+	}
+	got, err := f.Contents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != lock {
+		t.Errorf("committed flake.lock content differs from the working tree:\ncommitted:\n%s\nworktree:\n%s", got, lock)
 	}
 }
 

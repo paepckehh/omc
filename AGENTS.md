@@ -213,10 +213,12 @@ the subject/message pairing rules.
 The staged diff fed to the LLM suppresses lockfile content: `flake.lock`
 (see `gitops.suppressedDiffFiles`, matched case-insensitively on the
 base name, so subdirectories are covered) is machine-generated pin-hash
-noise, so its patch body is replaced by a one-line stub
-(`<path> updated`, content suppressed). The file keeps its entry in the
-changed-file list and the FileList UI; only the LLM prompt never sees
-its content.
+noise — a large list of hashes that trips the model — so its patch body
+is replaced by a one-line stub (`<path> updated`, content suppressed).
+The lockfile itself is staged and committed byte-for-byte like any other
+file (the commit tree is built from the index, not from the diff); it
+also keeps its entry in the changed-file list and the FileList UI. Only
+the AI prompt never sees its content.
 
 ## Git identity
 
