@@ -222,6 +222,8 @@ func (u *UI) TouchEnd(ev touch.Event) {
 // bell rings the terminal attention character on TTYs.
 func (u *UI) bell() {
 	if u.tty {
+		u.mu.Lock()
+		defer u.mu.Unlock()
 		fmt.Fprint(u.Err, touchBell)
 	}
 }

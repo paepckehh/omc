@@ -139,6 +139,12 @@ type UI struct {
 	// BeginGroup pushes; EndGroup pops. Groups are a no-op outside a TTY
 	// so captured logs keep the flat, greppable form.
 	groups []group
+
+	// animWait overrides the spinner frame interval for tests: zero means
+	// the production frame rate (see animFPS), a positive value is the
+	// exact wait between frames so tests can speed the animation up or
+	// slow it down deterministically.
+	animWait time.Duration
 }
 
 // group is a single level of the nested log-group tree (see UI.groups).
@@ -259,6 +265,8 @@ func (u *UI) BeginGroup(title string, lineCount int) {
 // nested) mirror the position the child records will occupy, and the title
 // replaces the level/brand/step tokens a record would carry at that depth.
 func (u *UI) renderGroupHeader() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	ts := u.styles.timestamp.Render(now())
 	top := u.groups[len(u.groups)-1]
 	title := u.styles.step.Render(top.title)
@@ -285,6 +293,8 @@ func (u *UI) EndGroup() {
 	if !u.tty {
 		return
 	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	popped := false
 	if n := len(u.groups); n > 0 {
 		u.groups = u.groups[:n-1]
@@ -654,6 +664,9 @@ func (u *UI) startSpinner(step, msg string) {
 		tree = " " + u.renderGroupedTree()
 	}
 	fps := time.Second / animFPS
+	if u.animWait > 0 {
+		fps = u.animWait
+	}
 
 	go func(stop <-chan struct{}, ts, tree, level, brand, stepLbl string) {
 		tk := time.NewTicker(fps)
@@ -699,8 +712,10 @@ func (u *UI) stopSpinner() {
 	close(u.animCtx)
 	u.animCtx = nil
 	u.anim = nil
-	// Clear the spinner line.
-	fmt.Fprint(u.Err, "\r\033[K")
+	// Erase the spinner frame and terminate the line: without the trailing
+	// newline the next record (or the next writer to the shared terminal)
+	// would attach to the spinner's line instead of starting its own.
+	fmt.Fprint(u.Err, "\r\033[K\n")
 	u.mu.Unlock()
 }
 
@@ -815,6 +830,8 @@ func (u *UI) FileList(files []string) {
 	for _, f := range files {
 		lines = append(lines, fmt.Sprintf("  %s %s", u.styles.bullet.Render("›"), u.styles.fileItem.Render(f)))
 	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	fmt.Fprintln(u.Err, lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
@@ -832,7 +849,10 @@ func (u *UI) Summary(subject, body string) {
 		}
 		return
 	}
-	fmt.Fprintln(u.Out, u.renderFrame(subject, body))
+	frame := u.renderFrame(subject, body)
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	fmt.Fprintln(u.Out, frame)
 }
 
 // Startup prints the version banner shown at program start. It goes to

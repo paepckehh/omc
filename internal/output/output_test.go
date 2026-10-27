@@ -3,8 +3,10 @@ package output
 import (
 	"bytes"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -18,6 +20,17 @@ func newTestUI() (*UI, *bytes.Buffer, *bytes.Buffer) {
 	return New(out, err), out, err
 }
 
+// newTestTTYUI builds a UI forced into TTY mode over plain buffers, so the
+// animated spinner / rewrite paths can be exercised deterministically in
+// tests. lipgloss is disabled so the emitted records are plain text and
+// easy to assert on.
+func newTestTTYUI() (*UI, *bytes.Buffer, *bytes.Buffer) {
+	out := &bytes.Buffer{}
+	err := &bytes.Buffer{}
+	ui := New(out, err)
+	ui.tty = true
+	return ui, out, err
+}
 func TestStepSuccessNonTTY(t *testing.T) {
 	ui, _, err := newTestUI()
 	if err := ui.Step("stage", "staging all changes", func() error { return nil }); err != nil {
@@ -378,18 +391,6 @@ func TestEmitDecoratesStateAndAction(t *testing.T) {
 	}
 }
 
-// newTestTTYUI builds a UI that reports IsTTY() == true, so the styled,
-// tree-grouped rendering paths are exercised. The writers are plain buffers,
-// so the rendered strings carry no real ANSI cursor control but do carry
-// lipgloss color escapes — the substring checks below stay robust to that.
-func newTestTTYUI() (*UI, *bytes.Buffer, *bytes.Buffer) {
-	out := &bytes.Buffer{}
-	err := &bytes.Buffer{}
-	ui := &UI{Out: out, Err: err, tty: true}
-	ui.initStyles()
-	return ui, out, err
-}
-
 // stripANSI removes CSI escape sequences so assertions can match the visible
 // text regardless of coloring.
 func stripANSI(s string) string {
@@ -737,6 +738,101 @@ func TestEmitGroupedKeepsTokens(t *testing.T) {
 	for _, want := range []string{"OK", "omc", "commit", "committed", "hash=9d3f2ab", "signed=true"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("grouped line missing %q, got: %q", want, got)
+		}
+	}
+}
+
+// TestSpinnerStopStartsNextRecordOnFreshLine is the regression test for the
+// LLM generation spinner: the live spinner rewrites its line with \r and no
+// trailing newline, so SpinnerStop must erase the frame AND terminate the
+// line. Without the terminator the next log record (the commit-message
+// preview emitted right after the AI message/TL;DR phases) is stitched
+// directly onto the spinner's line instead of starting on its own.
+func TestSpinnerStopStartsNextRecordOnFreshLine(t *testing.T) {
+	ui, _, errw := newTestTTYUI()
+
+	ui.SpinnerStart("ollama", "generating commit message")
+	ui.SpinnerUpdate("condensing to TL;DR")
+	ui.SpinnerStop()
+	ui.Info("next structured record")
+
+	got := errw.String()
+	if !strings.Contains(got, "\r\033[K\n") {
+		t.Fatalf("SpinnerStop must erase the frame and terminate the line, got: %q", got)
+	}
+	// The record emitted after the stop must begin at the start of a line:
+	// everything between the stop's terminating newline and the record's
+	// timestamp must be only the timestamp prefix, with no spinner frame
+	// residue stitched in front of the record.
+	idx := strings.Index(got, "next structured record")
+	if idx < 0 {
+		t.Fatalf("INFO record missing from output: %q", got)
+	}
+	stopIdx := strings.LastIndex(got[:idx], "\r\033[K\n")
+	if stopIdx < 0 {
+		t.Fatalf("no terminated spinner line before the record, got: %q", got)
+	}
+	between := got[stopIdx+len("\r\033[K\n") : idx]
+	if !regexp.MustCompile(`^\d\d:\d\d:\d\d `).MatchString(between) {
+		t.Fatalf("record after SpinnerStop is stitched to the spinner line, residue: %q", between)
+	}
+}
+
+// TestSpinnerStopNoEmptyLines ensures the fresh-line terminator never
+// produces stray empty lines in the structured log stream: a record must
+// follow directly on the terminated line, not after a pile of blank lines.
+func TestSpinnerStopNoEmptyLines(t *testing.T) {
+	ui, _, errw := newTestTTYUI()
+	ui.SpinnerStart("ollama", "generating commit message")
+	ui.SpinnerStop()
+	ui.Info("record after stop")
+	got := errw.String()
+	// Exactly one newline terminates the spinner line; the record follows
+	// on the same logical line, so there must be no blank line between.
+	if strings.Contains(got, "\r\033[K\n\n") {
+		t.Fatalf("spinner stop introduced an empty line, got: %q", got)
+	}
+}
+
+// TestSpinnerConcurrentWritersDoNotClobber exercises the race the pty capture
+// exposed: while a spinner frame is live, unguarded writers to the shared
+// terminal (Summary's stdout frame, FileList's stderr list, EndGroup's
+// separator) could interleave with the \r-rewrite loop. With the frame
+// ticker slowed down, this run must terminate promptly under -race and the
+// concurrent writers must not garble each other.
+func TestSpinnerConcurrentWritersDoNotClobber(t *testing.T) {
+	ui, out, errw := newTestTTYUI()
+	ui.mu.Lock()
+	ui.animWait = 5 * time.Millisecond
+	ui.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ui.SpinnerStart("ollama", "generating commit message")
+		ui.SpinnerUpdate("condensing to TL;DR")
+		time.Sleep(5 * time.Millisecond)
+		ui.Summary("subject", "")
+		ui.FileList([]string{"a.go", "b.go"})
+		ui.BeginGroup("g", 1)
+		ui.Info("grouped record")
+		ui.EndGroup()
+		ui.SpinnerStop()
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent writers deadlocked against the live spinner")
+	}
+
+	gotOut := stripANSI(out.String())
+	if !strings.Contains(gotOut, "subject") {
+		t.Errorf("Summary frame lost to the spinner, got: %q", gotOut)
+	}
+	gotErr := stripANSI(errw.String())
+	for _, want := range []string{"a.go", "b.go", "grouped record"} {
+		if !strings.Contains(gotErr, want) {
+			t.Errorf("concurrent write %q garbled, got: %q", want, gotErr)
 		}
 	}
 }
