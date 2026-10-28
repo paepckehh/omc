@@ -193,3 +193,65 @@ func TestSignerSignAsLabelsTouchWait(t *testing.T) {
 		t.Errorf("SignAs label not applied, got %q", got)
 	}
 }
+
+// TestTouchStateFailFastAfterFailure pins the no-loop contract: once a
+// touch wait has failed (here: timed out), the shared TouchState latches
+// and every later signature through the same policy fails immediately —
+// no second prompt, no touch events, no wait — so a run never loops the
+// smartcard prompt after the user already failed to touch.
+func TestTouchStateFailFastAfterFailure(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	inner := &blockingSigner{inner: softwareSigner(t), release: release}
+	hook := &recordingHook{}
+	state := &TouchState{}
+	wrapped := WrapTouch(inner, TouchConfig{
+		KeyPath: "/k/id_ed25519_sk",
+		Action:  "the push",
+		Timeout: 40 * time.Millisecond,
+		Hook:    hook,
+		State:   state,
+	})
+
+	if _, err := wrapped.Sign(rand.Reader, []byte("payload")); !errors.Is(err, ErrTouchTimeout) {
+		t.Fatalf("first sign must fail with ErrTouchTimeout, got %v", err)
+	}
+	if !state.Failed() {
+		t.Fatal("TouchState must latch after a failed touch wait")
+	}
+
+	start := time.Now()
+	_, err := wrapped.Sign(rand.Reader, []byte("payload"))
+	if !errors.Is(err, ErrTouchTimeout) {
+		t.Fatalf("second sign must fail fast with ErrTouchTimeout, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 20*time.Millisecond {
+		t.Fatalf("gated sign must not wait for the touch, took %s", elapsed)
+	}
+	if events := hook.snapshot(); len(events) != 2 {
+		t.Fatalf("gated sign must not fire touch events (no re-prompt), got %d: %+v", len(events), events)
+	}
+}
+
+// TestTouchStateSuccessDoesNotLatch pins the opposite side: a confirmed
+// touch must not latch the gate — the next smartcard operation still gets
+// its own prompt and its own bounded wait.
+func TestTouchStateSuccessDoesNotLatch(t *testing.T) {
+	hook := &recordingHook{}
+	state := &TouchState{}
+	wrapped := WrapTouch(softwareSigner(t), TouchConfig{
+		KeyPath: "/k/id_ed25519_sk",
+		Hook:    hook,
+		State:   state,
+	})
+
+	if _, err := wrapped.Sign(rand.Reader, []byte("payload")); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	if state.Failed() {
+		t.Fatal("a confirmed touch must not latch the gate")
+	}
+	if events := hook.snapshot(); len(events) != 2 {
+		t.Fatalf("expected begin+end events, got %d", len(events))
+	}
+}

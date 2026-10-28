@@ -134,6 +134,16 @@ func isSuppressedDiffFile(p string) bool {
 	})
 }
 
+// IsLockfile reports whether p is a machine-generated lockfile whose diff
+// content never reaches the LLM commit-message prompt (see
+// suppressedDiffFiles): matched on the base name, case-insensitive, so
+// lockfiles inside subdirectories are covered. The lockfile itself is
+// always staged and committed byte-for-byte; only the AI prompt is spared
+// its content. The pipeline uses this to detect lockfile-only changes (the
+// LLM is skipped entirely with a fixed message) and to guarantee the
+// commit message always mentions a lockfile update.
+func IsLockfile(p string) bool { return isSuppressedDiffFile(p) }
+
 // StagedDiff returns the patch text that will be committed: the difference
 // between HEAD's tree and the current index, as a unified diff. On the root
 // commit the diff covers the full tree. The returned fileNames slice lists
@@ -907,95 +917,140 @@ func pushOnce(repo *git.Repository, cfg *config.RemoteConfig, opts *git.PushOpti
 //
 // A local tag whose name already exists on the remote pointing at a
 // different object is never pushed over it. go-git rejects such a
-// non-forced update while building the request, which aborts the whole
-// wildcard pass before a single command is sent — so on any wildcard
-// failure the tags are retried one by one: the colliding names are skipped
-// (the remote tag stays untouched), every other pending tag still
-// publishes, and the skipped names are returned for the caller to warn
-// about. This is what makes the pre-tag upstream pull fail-proof: when
-// PullTags fails and the bump runs on stale local state, a colliding tag
-// name now degrades loudly instead of silently overwriting the upstream
-// tag (which the old forced refspec did).
+// non-forced update while building the request (for annotated tags the
+// fast-forward check fails with a bare "object not found"), which aborts
+// the whole wildcard pass before a single command is sent. Because the
+// error carries no ref name, the colliding set is determined with ONE
+// authenticated ref listing (remote.List) and the pass is retried exactly
+// ONCE with explicit refspecs for every pending tag outside that set: the
+// colliding names are skipped (the remote tags stay untouched), every
+// other pending tag still publishes, and the skipped names are returned
+// for the caller to warn about. This is what makes the pre-tag upstream
+// pull fail-proof: when PullTags fails and the bump runs on stale local
+// state, a colliding tag name now degrades loudly instead of silently
+// overwriting the upstream tag (which the old forced refspec did).
 //
-// The per-tag retry costs one extra session per local tag, but it only runs
-// in the collision case, never on the happy path. The residual race — the
-// remote gaining a tag between the pull and the push advertisement — is
-// closed too, because the advertisement itself reveals the collision; only
-// a change inside the same push session could still slip through, which is
-// inherent to the git protocol without force-with-lease (go-git supports
-// that for branches only).
+// The bounded retry is deliberate: with an FIDO2 push key every additional
+// session is another smartcard touch, and touch prompts must never loop
+// (the old code retried per tag, one session per local tag). The tag pass
+// is therefore capped at three sessions worst case (wildcard, listing,
+// retry), one on the happy path, and a failed touch latches the shared
+// touch gate so every later session fails fast without prompting. A retry
+// that fails again degrades loudly with no fourth session: the pending
+// tags stay local and the error names the held-back names. The residual
+// race — the remote gaining a tag between the pull and the push
+// advertisement — is closed by the advertisement itself, because the
+// collision check runs against it; only a change inside the same push
+// session could still slip through, which is inherent to the git protocol
+// without force-with-lease (go-git supports that for branches only).
 func pushTags(repo *git.Repository, cfg *config.RemoteConfig, auth transport.AuthMethod) (skipped []string, err error) {
-	err = pushOnce(repo, cfg, &git.PushOptions{
+	werr := pushOnce(repo, cfg, &git.PushOptions{
 		RemoteName: cfg.Name,
 		Auth:       auth,
 		RefSpecs:   []config.RefSpec{config.RefSpec("refs/tags/*:refs/tags/*")},
 	})
-	if err == nil || errors.Is(err, git.NoErrAlreadyUpToDate) {
+	if werr == nil || errors.Is(werr, git.NoErrAlreadyUpToDate) {
 		return nil, nil
 	}
 
-	// The wildcard pass failed: almost always a collision (a local tag
-	// whose name the remote already has at a different hash), which
-	// go-git turns into an abort of the entire pass. Retry per tag so only
-	// the colliding name is held back.
-	names, ierr := sortedTagNames(repo)
-	if ierr != nil {
-		return nil, err
+	// The wildcard pass failed: usually a collision (a local tag whose
+	// name the remote already has at a different hash), which go-git
+	// turns into an abort of the entire pass with a nameless error. One
+	// authenticated listing reveals the real remote tag state.
+	remoteTags, ok := remoteTagHashes(repo, cfg, auth)
+	if !ok {
+		return nil, werr
 	}
-	published := 0
-	var firstErr error
-	for _, name := range names {
-		rn := plumbing.NewTagReferenceName(name).String()
-		terr := pushOnce(repo, cfg, &git.PushOptions{
-			RemoteName: cfg.Name,
-			Auth:       auth,
-			RefSpecs:   []config.RefSpec{config.RefSpec(rn + ":" + rn)},
-		})
+	localTags, ierr := localTagHashes(repo)
+	if ierr != nil {
+		return nil, werr
+	}
+
+	var (
+		colliding []string
+		specs     []config.RefSpec
+	)
+	for name, local := range localTags {
+		remote, exists := remoteTags[name]
 		switch {
-		case terr == nil, errors.Is(terr, git.NoErrAlreadyUpToDate):
-			published++
+		case !exists:
+			// Pending: the remote lacks the name, push it.
+			rn := plumbing.NewTagReferenceName(name).String()
+			specs = append(specs, config.RefSpec(rn+":"+rn))
+		case remote == local:
+			// Already published identically: nothing to send.
 		default:
-			skipped = append(skipped, name)
-			if firstErr == nil {
-				firstErr = terr
-			}
+			// Collision: the remote tag points elsewhere and is never
+			// overwritten; hold the name back.
+			colliding = append(colliding, name)
 		}
 	}
+	if len(colliding) == 0 {
+		// No collision: the wildcard failure was something else — a
+		// transport error or a genuinely missing object. Surface it
+		// untouched instead of speculatively retrying.
+		return nil, werr
+	}
+	slices.Sort(colliding)
+
+	if len(specs) == 0 {
+		// The colliding tags were the only local tags: nothing to retry.
+		return colliding, fmt.Errorf("no tag pushed; held back: %s: %w", strings.Join(colliding, ", "), werr)
+	}
+
+	// The one retry: every pending tag except the colliding names, in a
+	// single session.
+	rerr := pushOnce(repo, cfg, &git.PushOptions{
+		RemoteName: cfg.Name,
+		Auth:       auth,
+		RefSpecs:   specs,
+	})
 	switch {
-	case len(skipped) == 0:
-		// Every tag went through individually; the wildcard failure was
-		// transient. Report success — everything the caller asked for is
-		// published.
-		return nil, nil
-	case published > 0:
-		// Degrade: the colliding tags stay local, the rest is published.
-		return skipped, nil
+	case rerr == nil, errors.Is(rerr, git.NoErrAlreadyUpToDate):
+		return colliding, nil
 	default:
-		// Nothing published at all — surface the error, with the
-		// held-back names so a grep of the warning names the tag.
-		return skipped, fmt.Errorf("no tag pushed; held back: %s: %w", strings.Join(skipped, ", "), firstErr)
+		// No fourth session: the remaining pending tags stay local and
+		// the error names the held-back names so the degrade is loud.
+		return colliding, fmt.Errorf("no tag pushed; held back: %s: %w", strings.Join(colliding, ", "), rerr)
 	}
 }
 
-// sortedTagNames returns the names of all refs/tags/* in the repository in
-// sorted order, so the per-tag push retry is deterministic.
-func sortedTagNames(repo *git.Repository) ([]string, error) {
+// remoteTagHashes lists the remote's tags through one authenticated
+// session (git ls-remote), returning name → hash. ok is false when the
+// listing itself failed, in which case the caller keeps the original
+// wildcard error.
+func remoteTagHashes(repo *git.Repository, cfg *config.RemoteConfig, auth transport.AuthMethod) (tags map[string]plumbing.Hash, ok bool) {
+	remote := git.NewRemote(repo.Storer, cfg)
+	refs, err := remote.List(&git.ListOptions{Auth: auth})
+	if err != nil {
+		return nil, false
+	}
+	tags = make(map[string]plumbing.Hash)
+	for _, ref := range refs {
+		if ref.Type() == plumbing.HashReference && ref.Name().IsTag() {
+			tags[ref.Name().Short()] = ref.Hash()
+		}
+	}
+	return tags, true
+}
+
+// localTagHashes returns the local tags as name → hash (refs/tags/*).
+func localTagHashes(repo *git.Repository) (map[string]plumbing.Hash, error) {
 	iter, err := repo.Tags()
 	if err != nil {
 		return nil, fmt.Errorf("list tags: %w", err)
 	}
 	defer iter.Close()
-	var names []string
+	tags := make(map[string]plumbing.Hash)
 	if err := iter.ForEach(func(ref *plumbing.Reference) error {
 		if ref.Type() == plumbing.HashReference {
-			names = append(names, strings.TrimPrefix(ref.Name().String(), "refs/tags/"))
+			tags[ref.Name().Short()] = ref.Hash()
 		}
 		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("iterate tags: %w", err)
 	}
-	slices.Sort(names)
-	return names, nil
+	return tags, nil
 }
 
 // PullTags fetches the default remote's refs into the local repository, the

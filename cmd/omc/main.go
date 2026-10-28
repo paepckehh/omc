@@ -48,10 +48,13 @@
 //	OMC_TOUCH_TIMEOUT  seconds to wait for a FIDO2 security-key (yubikey)
 //	                   touch before degrading: every smartcard wait —
 //	                   commit signing, tag signing, the upstream tag pull,
-//	                   the push — is bounded by it; on timeout omc warns
-//	                   and continues (commit unsigned, tag/pull/push
-//	                   skipped or local). Default 60; 0 waits forever,
-//	                   matching OpenSSH's own unbounded wait.
+//	                   the push — is bounded by it; on timeout omc warns,
+//	                   degrades the affected operation (commit unsigned,
+//	                   tag/pull/push skipped or local), never prompts for
+//	                   the card again in the same run, and exits 1 so
+//	                   scripts can tell the difference. Default
+//	                   60; 0 waits forever, matching OpenSSH's own
+//	                   unbounded wait.
 //	OMC_TOUCH_NOTIFY   desktop notifications while a touch is pending:
 //	                   "auto" (default; a freedesktop notification daemon
 //	                   is detected via D-Bus at runtime — GNOME, KDE,
@@ -114,8 +117,12 @@ func run() int {
 	// that can block on a FIDO2 touch — the commit and tag signatures and
 	// the SSH authentications of the upstream tag pull and the push — so
 	// wherever the smartcard waits, the user is prompted and the wait is
-	// bounded (OMC_TOUCH_TIMEOUT; zero waits forever like OpenSSH).
-	touchCfg := sign.TouchConfig{Timeout: cfg.TouchTimeout, Hook: ui}
+	// bounded (OMC_TOUCH_TIMEOUT; zero waits forever like OpenSSH). The
+	// shared state latches the first failed wait: every later smartcard
+	// operation in the run fails fast without prompting again (touch
+	// prompts never loop), and the run exits 1 (see touchExit).
+	touchState := &sign.TouchState{}
+	touchCfg := sign.TouchConfig{Timeout: cfg.TouchTimeout, Hook: ui, State: touchState}
 
 	// 1. Find the repository we are inside of.
 	var (
@@ -179,7 +186,7 @@ func run() int {
 	if strings.TrimSpace(diffText) == "" {
 		ui.CleanTree()
 		pushNothing(ui, repo, cfg, touchCfg)
-		return 0
+		return touchExit(ui, touchState)
 	}
 
 	// Show the changed file list as a compact diagnostic.
@@ -189,16 +196,26 @@ func run() int {
 	defer cancel()
 
 	// 4. Resolve the commit message. Environment overrides
-	// (OMC_SUBJECT / OMC_MESSAGE) win over LLM generation: when
-	// either is set, no LLM call is made. See AGENTS.md for the
-	// pairing rules. When no override is active, LLM backends are
-	// probed in order (Ollama first, then any OpenAI-compatible
-	// endpoint) and the first reachable one generates the message;
-	// the same prompts and response handling apply to every backend.
+	// (OMC_SUBJECT / OMC_MESSAGE) win over everything: when either is
+	// set, no LLM call is made and the message lands verbatim. A
+	// lockfile-only change (flake.lock and friends) is decided next: the
+	// diff the model would see is nothing but suppression stubs, so the
+	// generation is skipped for a fixed "update nixos flake.lock" message
+	// — the lockfile itself is still committed byte-for-byte. Only then do
+	// the LLM backends run, probed in order (Ollama first, then any
+	// OpenAI-compatible endpoint); the first reachable one generates the
+	// message with the same prompts and response handling as every other
+	// backend. Whatever path produced it, a lockfile update is always
+	// stated in the final message (see mentionLockfileUpdate).
 	msg := gitops.CommitMessage{Subject: "update"}
+	overridden := false
 	if override, ok := overrideMessage(cfg); ok {
 		msg = override
+		overridden = true
 		ui.Info("message override active (OMC_SUBJECT/OMC_MESSAGE)")
+	} else if lockfileOnly(files) {
+		msg = flakeLockMessage()
+		ui.Info("lockfile-only change; skipping llm message generation")
 	} else if candidates := resolveGenerators(cfg); len(candidates) > 0 {
 		// The two-stage LLM generation is its own nested group: each
 		// probe is a step (INFO + OK), so the group budget is twice the
@@ -207,6 +224,13 @@ func run() int {
 		ui.BeginGroup("💬 message generation", 2*len(candidates))
 		msg = generateMessage(ui, ctx, candidates, diffText, files)
 		ui.EndGroup()
+	}
+	// The lockfile guarantee: whenever a lockfile is among the changed
+	// files, the committed message states its update — even when no LLM
+	// was configured or the model forgot to mention it. Overrides are
+	// exempt: they land verbatim by contract.
+	if !overridden {
+		msg = mentionLockfileUpdate(msg, files)
 	}
 
 	// Preview the resolved commit message.
@@ -345,7 +369,7 @@ func run() int {
 		ui.EndGroup()
 		ui.EndGroup()
 		ui.Warn("tag: failed to tag %s: %v", tagName, tagErr)
-		return 0
+		return touchExit(ui, touchState)
 	}
 	ui.TagResult(tagName, hash.String()[:7], signer != nil)
 
@@ -366,7 +390,21 @@ func run() int {
 	}
 	ui.EndGroup() // committing & publishing
 
-	return 0
+	return touchExit(ui, touchState)
+}
+
+// touchExit maps the run's outcome to its exit code. A failed security-key
+// touch wait never blocked or rolled anything back — the affected
+// operations degraded (unsigned commit, local tag, skipped pull/push) and
+// no further touch was prompted — but the run must not report success:
+// exit 1, with a final WARN record so the failure is greppable even off a
+// TTY.
+func touchExit(ui *output.UI, state *sign.TouchState) int {
+	if !state.Failed() {
+		return 0
+	}
+	ui.Warn("security key touch failed earlier; run degraded (commit unsigned and/or tag, pull, push skipped), exiting 1")
+	return 1
 }
 
 // commitRoutine runs the commit step + the structured result for the
@@ -567,6 +605,68 @@ func shortenSubject(body string) string {
 	return strings.TrimSpace(body)
 }
 
+// flakeLockSubject is the fixed commit subject for lockfile-only changes.
+const flakeLockSubject = "update nixos flake.lock"
+
+// flakeLockMessage is the fixed commit message for a change that touches
+// nothing but machine-generated lockfiles. The LLM is skipped entirely for
+// such commits: the diff it would receive consists of suppression stubs
+// ("flake.lock updated", content suppressed), so there is nothing left for
+// a model to describe. The lockfile itself is staged and committed
+// byte-for-byte like any other file; only the generation is skipped.
+func flakeLockMessage() gitops.CommitMessage {
+	return gitops.CommitMessage{Subject: flakeLockSubject}
+}
+
+// lockfileOnly reports whether every changed file is a machine-generated
+// lockfile whose diff content is suppressed from the LLM prompt
+// (gitops.IsLockfile). An empty file list is not lockfile-only (that case
+// never reaches message generation; the clean-tree path exits earlier).
+func lockfileOnly(files []string) bool {
+	if len(files) == 0 {
+		return false
+	}
+	for _, f := range files {
+		if !gitops.IsLockfile(f) {
+			return false
+		}
+	}
+	return true
+}
+
+// mentionLockfileUpdate guarantees the commit message states the lockfile
+// update whenever a lockfile (flake.lock, matched on the base name,
+// case-insensitive, subdirectories included) is among the changed files.
+// The LLM usually mentions it on its own — the suppression stub keeps the
+// file visible in the prompt — but the guarantee is deterministic: when
+// the message does not already contain "flake.lock", a bullet noting the
+// update is appended to the body. Messages without any lockfile in the
+// change set pass through unchanged, as do messages that already mention
+// the lockfile (case-insensitive, so "Flake.Lock" counts).
+func mentionLockfileUpdate(msg gitops.CommitMessage, files []string) gitops.CommitMessage {
+	lockfile := false
+	for _, f := range files {
+		if gitops.IsLockfile(f) {
+			lockfile = true
+			break
+		}
+	}
+	if !lockfile {
+		return msg
+	}
+	if strings.Contains(strings.ToLower(msg.String()), "flake.lock") {
+		return msg
+	}
+	body := strings.TrimSpace(msg.Body)
+	note := "- " + flakeLockSubject
+	if body == "" {
+		msg.Body = note
+	} else {
+		msg.Body = body + "\n\n" + note
+	}
+	return msg
+}
+
 // llmCandidate is a configured LLM backend awaiting a reachability probe.
 type llmCandidate struct {
 	gen  llm.Generator
@@ -655,6 +755,17 @@ func generateMessageProgress(ui *output.UI, ctx context.Context, gen llm.Generat
 		ui.SpinnerStop()
 		return gitops.CommitMessage{}, err
 	}
+	// The anti-leak choke point: every model answer passes through
+	// llm.Sanitize before any of it can become the commit subject or body.
+	// Reasoning/thinking blocks (closed or unclosed) and echoed prompt
+	// scaffolding are stripped here, no matter which backend produced the
+	// text. A response that sanitizes to nothing is treated like an empty
+	// answer so the next backend (or the default subject) takes over.
+	detail = llm.Sanitize(detail)
+	if detail == "" {
+		ui.SpinnerStop()
+		return gitops.CommitMessage{}, nil
+	}
 	ui.SpinnerUpdate("condensing to TL;DR")
 
 	tldr, err := gen.SummarizeTLDR(ctx, detail)
@@ -664,6 +775,7 @@ func generateMessageProgress(ui *output.UI, ctx context.Context, gen llm.Generat
 		// the subject and return the body instead of discarding it.
 		return gitops.CommitMessage{Subject: shortenSubject(detail), Body: detail}, err
 	}
+	tldr = llm.Sanitize(tldr)
 
 	subject := shortenSubject(tldr)
 	if subject == "" {

@@ -39,13 +39,19 @@ developer contract.
   sign through the running ssh-agent (`golang.org/x/crypto/ssh/agent`),
   which talks to the smartcard; no agent required for ordinary software
   keys.
-- **Always degrade, never block.** Every smartcard (FIDO2) touch wait is
-  bounded by `OMC_TOUCH_TIMEOUT` (default 60s, 0 = forever) and degrades on
-  timeout exactly like an unusable key: warn, commit unsigned, warn on
-  tag/pull/push. Touch prompts (records, TTY countdown, optional desktop
-  notification via D-Bus — `github.com/godbus/dbus/v5`, pure Go) attach to
-  the signature requests themselves, so the commit, the tag, the upstream
-  tag pull and the push all prompt identically. The D-Bus notification
+- **Always degrade, never block — but a failed touch fails the run.**
+  Every smartcard (FIDO2) touch wait is bounded by `OMC_TOUCH_TIMEOUT`
+  (default 60s, 0 = forever) and degrades on timeout exactly like an
+  unusable key: warn, commit unsigned, warn on tag/pull/push. Touch
+  prompts (records, TTY countdown, optional desktop notification via
+  D-Bus — `github.com/godbus/dbus/v5`, pure Go) attach to the signature
+  requests themselves, so the commit, the tag, the upstream tag pull and
+  the push all prompt identically. Touch waits are never looped: each
+  smartcard-bound operation prompts at most once, and once any touch wait
+  ends in a failure (timeout or error) the shared `sign.TouchState`
+  latches — every later smartcard-bound operation in the run fails fast
+  without prompting again — and the run degrades as above but **exits 1**
+  (the commit itself is still never rolled back). The D-Bus notification
   backend is only probed when a security-key path (sign or push key) is
   configured, so non-smartcard runs never touch D-Bus at all. If Ollama is unreachable or the LLM
   call fails, fall back to the OpenAI-compatible endpoint
@@ -76,13 +82,16 @@ internal/gitops/      PlainOpen, StageAll, StagedDiff, Commit, SignedCommit,
                       ValidSemverTag, NormalizeTag, PullTags (upstream tag
                       pull, git fetch --tags), PushToRemote + pushTags
                       (tag pass that never rewrites an existing remote tag;
-                      reports held-back names in PushResult.SkippedTags);
-                      both accept a sign.TouchConfig so their SSH auth is
-                      touch-bounded
+                      on collision one ref listing + one bounded retry,
+                      never a per-tag session loop; reports held-back
+                      names in PushResult.SkippedTags); both accept a
+                      sign.TouchConfig so their SSH auth is touch-bounded
 internal/sign/        sign.Load, sign.SecurityKeySigner, signer.Sign → armored SSH sig;
                       FIDO2 detection & agent delegation (DetectKind, IsSecurityKeyPath, HandleMatches);
                       WrapTouch wraps every agent signature with the touch
-                      prompt + enforced timeout (ErrTouchTimeout)
+                      prompt + enforced timeout (ErrTouchTimeout);
+                      TouchState latches the first failed wait so later
+                      signatures fail fast without re-prompting
 internal/touch/       shared TouchEvent/TouchHook vocabulary for smartcard
                       touch waits: sign produces the events, output consumes
 internal/notify/     runtime-detected desktop notifications over D-Bus
@@ -130,6 +139,21 @@ record overwrites the erased line instead and so starts at the start of
 its own fresh line; the `internal/output` tests render the raw byte
 stream through a mini terminal interpreter (`renderVT`) to pin both the
 no-stray-empty-lines and the fresh-line-start contracts down.
+
+**One live line, exclusive ownership.** On a TTY at most one animated
+line (the step/LLM spinner or the touch countdown) owns the terminal's
+current line at any time. A structured record emitted while an animated
+line is live first erases that line (`\r ESC[K`, to stderr, no newline)
+and then prints; the animation goroutine redraws on its next tick on
+the fresh line below, so records never ride on a spinner frame or
+countdown tail and are never clobbered by a later frame. Frame writes
+clear to end-of-line before every redraw so shrinking labels leave no
+residue. A touch wait takes over the live line: `TouchBegin` stops any
+running spinner first, then emits its INFO record, then starts the
+countdown — the touch prompt is never overlapped or erased by any other
+output. These contracts are pinned by the `internal/output` tests
+(`TestTouchPromptErasesSpinnerBeforeRecord`,
+`TestRecordsDuringTouchCountdownStayIntact`, and the renderVT suite).
 
 **Empty lines are forbidden anywhere, TTY or not.** Log groups close
 silently (`EndGroup` and the budget auto-close write no separator line),
@@ -221,15 +245,21 @@ failure mode found in the hunt; the guards are pinned by tests in
    can still produce a colliding name. The push's tag pass is therefore
    non-forced, exactly like `git push --tags` (git also refuses to move a
    tag without `--force`): go-git rejects the collision client-side while
-   building the request, aborting the whole wildcard pass — so
-   `gitops.pushTags` retries per tag on that failure, holding back only
-   the colliding name (`PushResult.SkippedTags`; the pipeline warns per
-   tag: "exists on the remote pointing elsewhere; left the remote tag
-   untouched") while every other pending tag still publishes. The old
-   forced refspec (`+refs/tags/*:refs/tags/*`) silently clobbered the
-   upstream tag in exactly this case. The per-tag retry costs one extra
-   session per local tag but only ever runs in the collision case, never
-   on the happy path (one wildcard session = one smartcard touch).
+   building the request (for annotated tags a bare, nameless "object not
+   found"), aborting the whole wildcard pass — so `gitops.pushTags`
+   determines the colliding set with ONE authenticated ref listing and
+   retries **once** with explicit refspecs for every pending tag outside
+   that set: the colliding names are held back (`PushResult.SkippedTags`;
+   the pipeline warns per tag: "exists on the remote pointing elsewhere;
+   left the remote tag untouched") while every other pending tag still
+   publishes. The old forced refspec (`+refs/tags/*:refs/tags/*`)
+   silently clobbered the upstream tag in exactly this case; the old
+   per-tag retry opened one authenticated session (one smartcard touch)
+   per local tag, looping the touch prompt. The listing-plus-retry caps
+   the tag pass at three sessions (three touches) worst case, one on the
+   happy path, and a failed touch latches the gate so every later session
+   fails fast without prompting — touch waits are never looped (see the
+   hard constraints).
 4. **Residual race, documented.** A tag appearing on the remote between
    the pull and the push advertisement is caught by the advertisement
    itself (guard 3). Only a change inside the same push session could
@@ -254,14 +284,29 @@ the LLM is skipped and the overrides land verbatim. See README.md for
 the subject/message pairing rules.
 
 The staged diff fed to the LLM suppresses lockfile content: `flake.lock`
-(see `gitops.suppressedDiffFiles`, matched case-insensitively on the
-base name, so subdirectories are covered) is machine-generated pin-hash
-noise — a large list of hashes that trips the model — so its patch body
-is replaced by a one-line stub (`<path> updated`, content suppressed).
-The lockfile itself is staged and committed byte-for-byte like any other
-file (the commit tree is built from the index, not from the diff); it
-also keeps its entry in the changed-file list and the FileList UI. Only
-the AI prompt never sees its content.
+(see `gitops.suppressedDiffFiles` / `gitops.IsLockfile`, matched
+case-insensitively on the base name, so subdirectories are covered) is
+machine-generated pin-hash noise — a large list of hashes that trips
+the model — so its patch body is replaced by a one-line stub (`<path>
+updated`, content suppressed). The lockfile itself is staged and
+committed byte-for-byte like any other file (the commit tree is built
+from the index, not from the diff); it also keeps its entry in the
+changed-file list and the FileList UI. Only the AI prompt never sees
+its content.
+
+A lockfile-only change (every changed file is a suppressed lockfile,
+so the model would see nothing but stubs) skips the LLM entirely with
+the fixed subject `update nixos flake.lock`. Conversely, whenever a
+lockfile is among the changed files, the committed message always
+states its update: after generation, a bullet noting it is appended
+when the model forgot to mention it (`mentionLockfileUpdate`). Env
+overrides are exempt from both rules — they land verbatim by contract.
+
+Every LLM answer passes through `llm.Sanitize` before it can become
+subject or body: reasoning/thinking blocks (closed or unclosed) and
+echoed prompt scaffolding are stripped no matter which backend
+produced the text; an answer that sanitizes to nothing counts as
+empty and the next backend (or the default subject) takes over.
 
 ## Git identity
 
@@ -308,5 +353,6 @@ config. Config files are only consulted for the identity fallback.
    is configured).
 7. Security-key touch policy honored everywhere: prompts fire from the
    signature requests (commit, tag, pull, push), the wait is bounded by
-   `OMC_TOUCH_TIMEOUT`, a timeout degrades, and desktop notifications are
-   runtime-detected (`OMC_TOUCH_NOTIFY`) and never block the run.
+   `OMC_TOUCH_TIMEOUT`, a failed wait latches (no later prompt, run exits
+   1), a timeout degrades, and desktop notifications are runtime-detected
+   (`OMC_TOUCH_NOTIFY`) and never block the run.

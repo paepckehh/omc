@@ -446,6 +446,15 @@ func (u *UI) emit(w io.Writer, level, step, msg string, fields ...Field) {
 	// cannot interleave with the rewrites and get garbled or erased.
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if u.tty && (u.animOn || u.touch != nil) {
+		// A live animated line (step/LLM spinner or touch countdown) owns
+		// the terminal's current line: erase it first so this record
+		// starts at column 0 of its own line instead of riding the frame
+		// tail. The animation goroutine redraws on its next tick, landing
+		// on the fresh line below the record. The erase carries no
+		// newline, keeping the no-stray-empty-lines contract.
+		fmt.Fprint(u.Err, "\r\033[K")
+	}
 	ts := now()
 	msg = sanitizeLine(msg)
 	fieldStr := u.renderFields(fields)
@@ -638,12 +647,14 @@ func (u *UI) Step(step, msg string, fn func() error) error {
 }
 
 // startSpinner launches a goroutine that animates the scramble spinner on
-// stderr. Only one spinner may be active at a time. The label can be changed
-// live via updateSpinner.
+// stderr. Only one animated line may be live at a time: while a touch
+// countdown is running the spinner stays off (the countdown owns the
+// terminal's current line), so the two animations can never fight over it.
+// The label can be changed live via updateSpinner.
 func (u *UI) startSpinner(step, msg string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if u.animOn {
+	if u.animOn || u.touch != nil {
 		return
 	}
 	u.animOn = true
@@ -690,7 +701,11 @@ func (u *UI) startSpinner(step, msg string) {
 				}
 				u.anim.tick()
 				frame := u.anim.render()
-				line := fmt.Sprintf("\r%s%s %s %s %s %s", ts, tree, level, brand, stepLbl, frame)
+				// Each frame clears to end-of-line before redrawing: a
+				// shrinking label must not leave residue, and a record
+				// printed mid-animation (emit erased the live line first)
+				// leaves the cursor on a fresh line the frame reclaims.
+				line := fmt.Sprintf("\r\033[K%s%s %s %s %s %s", ts, tree, level, brand, stepLbl, frame)
 				fmt.Fprint(u.Err, line)
 				u.mu.Unlock()
 			}

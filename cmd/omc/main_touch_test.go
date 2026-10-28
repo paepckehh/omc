@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -36,8 +37,9 @@ func (a neverSignAgent) SignWithFlags(key ssh.PublicKey, data []byte, flags agen
 // ssh-agent whose signature never arrives (a yubikey nobody touches), with a
 // one-second touch budget. The run must not hang waiting for the touch: the
 // commit signing times out, omc degrades to an unsigned commit (and an
-// unsigned tag, since the signer is dropped), and exits 0 — the "always
-// degrade, never block" contract applied to the smartcard wait.
+// unsigned tag, since the signer is dropped) — never blocking, never rolling
+// back — but a failed touch fails the run: exit code 1, exactly one touch
+// prompt (no re-prompt loop), and a final record that names the failure.
 func TestCommitTouchTimeoutDegradesToUnsigned(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping binary e2e in short mode")
@@ -120,8 +122,9 @@ func TestCommitTouchTimeoutDegradesToUnsigned(t *testing.T) {
 	start := time.Now()
 	out, err := cmd.CombinedOutput()
 	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("omc must exit 0 even when the touch never comes: %v\n%s", err, out)
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("omc must exit 1 when the touch never comes, got %v\n%s", err, out)
 	}
 	if elapsed > 15*time.Second {
 		t.Fatalf("omc blocked %s waiting for a touch; run output:\n%s", elapsed, out)
@@ -133,10 +136,16 @@ func TestCommitTouchTimeoutDegradesToUnsigned(t *testing.T) {
 		"committing unsigned",
 		"signed=false",
 		"tagged",
+		"exiting 1",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q:\n%s", want, got)
 		}
+	}
+	// The touch prompt fired exactly once: no re-prompt loop after the
+	// failed wait.
+	if n := strings.Count(got, "waiting for security key touch"); n != 1 {
+		t.Errorf("expected exactly one touch prompt, got %d:\n%s", n, got)
 	}
 	if strings.Contains(got, "gpgsig") {
 		t.Errorf("commit must be unsigned after the touch timeout")

@@ -145,7 +145,9 @@ variables in, structured logs out.
 ### 🧯 Always degrades, never blocks
 Broken key? Commit unsigned. Ollama down? Try OpenAI. OpenAI down? Use
 `update`. Push failed? Commit and tag stay local and safe. No half-finished
-state, ever.
+state, ever. One exception: a missed security-key touch fails the run —
+the commit still lands (unsigned), but omc never re-prompts for the card
+in the same run and exits 1.
 
 </td>
 </tr>
@@ -214,7 +216,10 @@ More terminal captures below. Expand to view them.
 A real YubiKey never blocks the run. Every smartcard wait gets a structured
 record, an animated countdown, a desktop notification after a few seconds, and a
 hard deadline (`OMC_TOUCH_TIMEOUT`, default 60s). A missed touch degrades to an
-unsigned commit instead of hanging your terminal forever.
+unsigned commit instead of hanging your terminal forever — and it fails the
+run: after one failed touch omc never prompts for the card again (every later
+smartcard operation degrades immediately) and exits 1, so a script can tell
+the commit was created without the requested signature.
 
 <img src="docs/screenshots/touch.svg" alt="omc waiting for a FIDO2 touch with a countdown, desktop notification and structured records" width="820">
 
@@ -433,7 +438,8 @@ A touch wait produces:
 - an animated `🔑 TOUCH YOUR SECURITY KEY` countdown and a terminal bell on a TTY;
 - a desktop notification after a few seconds via the freedesktop D-Bus
   interface (GNOME, KDE, XFCE, …), no `notify-send` binary;
-- a WARN record and a degrade path on timeout.
+- a WARN record and a degrade path on timeout. A failed touch latches: no
+  further touch prompts in the same run, and the run exits 1.
 
 The same policy covers every smartcard operation: commit signing, tag signing,
 the upstream tag fetch, and the push.
@@ -516,7 +522,7 @@ flowchart TD
 | Not inside a git repository | Fails with a clear error, exit 1 |
 | Signing key missing, corrupt, passphrase-protected | Warns, commits unsigned |
 | Security-key handle not loaded in ssh-agent | Warns, commits unsigned |
-| Smartcard touch not received in time | Warns, commits unsigned; tag/pull/push degrade |
+| Smartcard touch not received in time | Warns, commits unsigned; tag/pull/push degrade, **exits 1**, no further touch prompts |
 | Ollama unreachable | Probes the OpenAI-compatible endpoint |
 | Ollama reachable but generation fails | Falls back to the OpenAI-compatible endpoint |
 | Both AI backends unavailable or failing | Uses the subject `update` |

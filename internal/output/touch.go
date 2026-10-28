@@ -98,7 +98,20 @@ func (u *UI) TouchBegin(ev touch.Event) {
 	}
 	p := &touchPrompt{ev: ev, started: time.Now(), done: make(chan struct{})}
 	u.touch = p
+	animOn := u.animOn
 	u.mu.Unlock()
+
+	if u.tty {
+		// The countdown takes over the live line FIRST: any spinner
+		// running for the enclosing step is stopped (its line erased)
+		// before the begin record below prints, so the record can never
+		// ride on a spinner frame or be clobbered by the frame's next
+		// \r-rewrite. The spinner's owner keeps calling update/stop
+		// afterwards; after this handover both are no-ops.
+		if animOn {
+			u.stopSpinner()
+		}
+	}
 
 	// The structured record always fires, TTY or not, and always before
 	// the blocking wait: it is what makes a hung touch greppable in
@@ -121,7 +134,6 @@ func (u *UI) TouchBegin(ev touch.Event) {
 		// The countdown owns the stderr line for the duration of the
 		// wait: any spinner running for the enclosing step is stopped
 		// (its completion record follows on a fresh line later).
-		u.stopSpinner()
 		u.bell()
 		u.startCountdown(p)
 	} else {
@@ -149,23 +161,11 @@ func (u *UI) TouchEnd(ev touch.Event) {
 		notifyID, notifyShown = p.notifyID, p.notifyPosted
 	}
 	notifier := u.notifier
-	if u.tty {
-		// Clear the countdown line before the records below render.
-		fmt.Fprint(u.Err, "\r\033[K")
-	}
-	u.mu.Unlock()
-	if p == nil {
-		return
-	}
-	if notifier != nil && notifyShown && notifyID != 0 {
-		go notifier.Close(notifyID)
-	}
-
-	elapsed := time.Since(p.started).Round(time.Second)
-	if u.tty {
-		// A direct, tree-aligned line matching the structured record
-		// emitted just below, without consuming a line from any open
-		// group's budget — the structured emit owns that.
+	if p != nil && u.tty {
+		// The countdown owned the live line. Clear it (no newline, so no
+		// stray empty line) and print the outcome line in the same
+		// critical section, so no concurrent writer can slip in between
+		// the clear and the outcome.
 		ts := u.styles.timestamp.Render(now())
 		tree := ""
 		if u.inGroup() {
@@ -191,6 +191,15 @@ func (u *UI) TouchEnd(ev touch.Event) {
 		}
 		fmt.Fprintf(u.Err, "\r\033[K%s%s %s\n", ts, tree, msg)
 	}
+	u.mu.Unlock()
+	if p == nil {
+		return
+	}
+	if notifier != nil && notifyShown && notifyID != 0 {
+		go notifier.Close(notifyID)
+	}
+
+	elapsed := time.Since(p.started).Round(time.Second)
 
 	fields := []Field{
 		F("elapsed", elapsed.String()),

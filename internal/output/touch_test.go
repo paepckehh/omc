@@ -231,3 +231,117 @@ func TestTouchCountdownRender(t *testing.T) {
 
 // Compile-time proof that the UI satisfies the hook the signers drive.
 var _ touch.Hook = (*UI)(nil)
+
+// TestTouchPromptErasesSpinnerBeforeRecord pins the live-line ownership
+// contract for the spinner-to-touch handover: when a touch wait starts while
+// a spinner (e.g. the LLM generation or a step spinner) is animating, the
+// spinner must be erased BEFORE the touch begin record is printed. The old
+// order printed the record onto the live spinner frame (the record rode the
+// frame tail) and then the spinner's next \r-rewrite clobbered the record
+// entirely. Rendered through renderVT, the begin record must start with its
+// timestamp at column 0 and the screen must stay free of empty lines.
+func TestTouchPromptErasesSpinnerBeforeRecord(t *testing.T) {
+	ui, _, errBuf := newTestTTYUI()
+	ui.mu.Lock()
+	ui.animWait = time.Millisecond
+	ui.mu.Unlock()
+
+	ui.Info("first record")
+	ui.SpinnerStart("ollama", "generating commit message")
+	time.Sleep(5 * time.Millisecond) // let spinner frames paint
+	ui.TouchBegin(touch.Event{KeyPath: "/k/id_ed25519_sk", Action: "the tag signing"})
+	time.Sleep(150 * time.Millisecond) // let countdown frames paint
+	ui.TouchEnd(touch.Event{})
+	// The spinner owner (the LLM flow) still calls update/stop afterwards;
+	// after the handover both must be no-ops that leave the screen intact.
+	ui.SpinnerUpdate("condensing to TL;DR")
+	ui.SpinnerStop()
+	ui.Info("record after stop")
+
+	rendered := renderVT(errBuf.String())
+	for n, line := range rendered {
+		if strings.TrimSpace(line) == "" {
+			t.Fatalf("empty line %d in the rendered terminal:\n%s", n, strings.Join(rendered, "\n"))
+		}
+	}
+	// The begin record must exist and start with its timestamp at column 0:
+	// the old order glued it onto the spinner frame and then erased it with
+	// the spinner stop, so it vanished from the screen entirely.
+	sawBegin := false
+	for _, line := range rendered {
+		if !strings.Contains(line, "waiting for security key touch") {
+			continue
+		}
+		sawBegin = true
+		// The spinner frame carries its own timestamp prefix, so matching
+		// the timestamp alone is not enough: the record's line must carry
+		// no spinner residue at all.
+		if strings.Contains(line, "generating commit message") ||
+			strings.Contains(line, "ollama") ||
+			!timestampLine.MatchString(line) {
+			t.Fatalf("touch begin record is stitched to spinner residue, rendered line: %q", line)
+		}
+	}
+	if !sawBegin {
+		t.Fatalf("touch begin record vanished from the rendered terminal:\n%s", strings.Join(rendered, "\n"))
+	}
+}
+
+// TestRecordsDuringTouchCountdownStayIntact pins the live-line ownership
+// contract mid-wait: a structured record printed while the touch countdown
+// is animating must land on its own fresh, complete line — the countdown is
+// erased first and redraws below the record on its next tick — and the
+// countdown itself must survive (on its own line, never sharing one with a
+// record). The old emit printed the record at the cursor, gluing it onto the
+// countdown frame.
+func TestRecordsDuringTouchCountdownStayIntact(t *testing.T) {
+	ui, _, errBuf := newTestTTYUI()
+
+	ui.TouchBegin(touch.Event{KeyPath: "/k/id_ed25519_sk", Timeout: 30 * time.Second})
+	time.Sleep(150 * time.Millisecond) // let countdown frames paint
+	ui.Info("mid-wait record")
+	time.Sleep(150 * time.Millisecond) // more frames after the record
+	// Snapshot while the countdown is still live: TouchEnd legitimately
+	// erases the countdown line from the final screen, so the coexistence
+	// of record and countdown is asserted mid-wait. The read goes through
+	// the UI mutex — the countdown goroutine writes its frames under the
+	// same lock, so an unsynchronized read here is a data race.
+	ui.mu.Lock()
+	mid := renderVT(errBuf.String())
+	ui.mu.Unlock()
+	ui.TouchEnd(touch.Event{})
+
+	var recordLine string
+	countdownLines := 0
+	for _, line := range mid {
+		if strings.Contains(line, "mid-wait record") {
+			recordLine = line
+		}
+		if strings.Contains(line, "TOUCH YOUR SECURITY KEY") {
+			countdownLines++
+		}
+	}
+	if recordLine == "" {
+		t.Fatalf("mid-wait record missing from the rendered terminal: %q", errBuf.String())
+	}
+	if !timestampLine.MatchString(recordLine) {
+		t.Fatalf("mid-wait record is stitched to countdown residue, rendered line: %q", recordLine)
+	}
+	if strings.Contains(recordLine, "TOUCH YOUR SECURITY KEY") {
+		t.Fatalf("record shares its line with the countdown: %q", recordLine)
+	}
+	if countdownLines == 0 {
+		t.Errorf("countdown frames vanished from the rendered terminal:\n%s", strings.Join(mid, "\n"))
+	}
+	for n, line := range mid {
+		if strings.TrimSpace(line) == "" {
+			t.Fatalf("empty line %d in the rendered terminal:\n%s", n, strings.Join(mid, "\n"))
+		}
+	}
+	// After the wait ends the screen must still be free of empty lines.
+	for n, line := range renderVT(errBuf.String()) {
+		if strings.TrimSpace(line) == "" {
+			t.Fatalf("empty line %d after TouchEnd:\n%s", n, strings.Join(renderVT(errBuf.String()), "\n"))
+		}
+	}
+}

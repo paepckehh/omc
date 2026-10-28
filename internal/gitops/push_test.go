@@ -523,3 +523,110 @@ func writeBackslashCommit(t *testing.T, repo *git.Repository) plumbing.Hash {
 	}
 	return commitHash
 }
+
+// TestPushTagsMultipleCollisionsStillPublishesFreeTag pins the no-loop
+// contract of the tag pass: the wildcard push aborts on the first colliding
+// tag (go-git's nameless "object not found"), so one authenticated listing
+// computes the whole colliding set and a single retry publishes every free
+// tag. No per-tag loop: with an FIDO2 push key every extra session is
+// another smartcard touch, so the pass is bounded at one listing plus one
+// retry no matter how many tags collide.
+func TestPushTagsNoRetryLoopAfterSecondCollision(t *testing.T) {
+	bare := newRemoteBare(t, "omcnl")
+
+	seed, seedWt, seedDir := initTestRepo(t)
+	if _, err := seed.CreateRemote(&config.RemoteConfig{
+		Name: "origin",
+		URLs: []string{"omcnl://omc/repos/remote.git"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	id := Identity{Name: "Test User", Email: "test@example.com"}
+	if err := os.WriteFile(filepath.Join(seedDir, "seed.txt"), []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedWt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	seedHash, err := Commit(seed, CommitMessage{Subject: "seed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"v0.0.1", "v0.0.2"} {
+		if _, err := CreateTag(seed, seedHash, name, "seed", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := PushToRemote(seed, "", sign.TouchConfig{}); err != nil {
+		t.Fatalf("seed push: %v", err)
+	}
+
+	// Local: a clone blind to both upstream tags (stale state) that bumps
+	// into both names again, plus one free tag that would publish.
+	cloneDir := t.TempDir()
+	repo, err := git.PlainClone(cloneDir, false, &git.CloneOptions{
+		URL: "omcnl://omc/repos/remote.git",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"v0.0.1", "v0.0.2"} {
+		if err := repo.Storer.RemoveReference(plumbing.NewTagReferenceName(name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cloneDir, "local.txt"), []byte("local"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatal(err)
+	}
+	localHash, err := Commit(repo, CommitMessage{Subject: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteTag1, err := bare.Storer.Reference(plumbing.NewTagReferenceName("v0.0.1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"v0.0.1", "v0.0.2", "v0.0.5"} {
+		if _, err := CreateTag(repo, localHash, name, "stale bump", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res, err := PushToRemote(repo, "", sign.TouchConfig{})
+	if err != nil {
+		t.Fatalf("PushToRemote must degrade, not fail: %v", err)
+	}
+	if len(res.SkippedTags) != 2 || res.SkippedTags[0] != "v0.0.1" || res.SkippedTags[1] != "v0.0.2" {
+		t.Errorf("SkippedTags = %v, want [v0.0.1 v0.0.2] (the full colliding set)", res.SkippedTags)
+	}
+	if !res.Tags {
+		t.Error("Tags = false, want true (the free tag was published)")
+	}
+
+	// The remote tags are untouched and the free tag published in the
+	// single retry — no per-tag session loop even with two collisions.
+	got, rerr := bare.Storer.Reference(plumbing.NewTagReferenceName("v0.0.1"))
+	if rerr != nil || got.Hash() != remoteTag1.Hash() {
+		t.Errorf("remote v0.0.1 must stay the seed tag: %s err=%v", got.Hash(), rerr)
+	}
+	remoteTag2, err := bare.Storer.Reference(plumbing.NewTagReferenceName("v0.0.2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, rerr := bare.Storer.Reference(plumbing.NewTagReferenceName("v0.0.2")); rerr != nil || got.Hash() != remoteTag2.Hash() {
+		t.Errorf("remote v0.0.2 must stay the seed tag: %s err=%v", got.Hash(), rerr)
+	}
+	localTag5, err := repo.Storer.Reference(plumbing.NewTagReferenceName("v0.0.5"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRemoteRef(t, bare.Storer, plumbing.NewTagReferenceName("v0.0.5"), localTag5.Hash())
+	assertRemoteRef(t, bare.Storer, plumbing.NewBranchReferenceName("master"), localHash)
+}

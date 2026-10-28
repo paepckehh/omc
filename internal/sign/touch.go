@@ -18,6 +18,38 @@ import (
 // proceed unsigned, never block.
 var ErrTouchTimeout = errors.New("security key touch wait timed out")
 
+// TouchState latches the first failed security-key touch wait of a run.
+// omc never loops touch prompts: once a wait has ended in a timeout or an
+// error, every later signature through a TouchConfig sharing this state
+// fails immediately with ErrTouchTimeout — no prompt, no hook events, no
+// wait — so the run degrades the remaining smartcard operations in one go
+// and can exit non-zero. A confirmed touch does not latch.
+type TouchState struct {
+	mu     sync.Mutex
+	failed bool
+}
+
+// Failed reports whether a touch wait has already failed in this run.
+func (s *TouchState) Failed() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failed
+}
+
+// latch records the failed wait. Idempotent; only the first failure matters.
+// A nil state (no gate configured) is a no-op.
+func (s *TouchState) latch() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.failed = true
+	s.mu.Unlock()
+}
+
 // TouchConfig configures the touch wait wrapper that sign.WrapTouch (and the
 // agent-backed signers built on it) install around every smartcard-bound
 // signature. Zero fields disable the wrapper's extras: no hook, no timeout
@@ -39,6 +71,10 @@ type TouchConfig struct {
 	Timeout time.Duration
 	// Hook receives the begin/end of every touch wait. May be nil.
 	Hook touch.Hook
+	// State, when set, is shared by every TouchConfig of the run: the
+	// first failed touch wait latches it and all later waits fail fast
+	// without prompting (see TouchState). May be nil.
+	State *TouchState
 }
 
 // Active reports whether the wrapper has anything to do: a hook to notify
@@ -127,7 +163,16 @@ func (s *touchSigner) SignWithAlgorithm(rand io.Reader, data []byte, algorithm s
 // goroutine (the ssh-agent protocol blocks until the smartcard answers and
 // offers no cancellation); the enforced deadline races the result and, on
 // timeout, fails the signature with ErrTouchTimeout.
+//
+// When the shared TouchState is already latched (an earlier wait in this
+// run failed), the signature fails immediately with ErrTouchTimeout: the
+// user already declined to touch, so omc never loops the prompt — no hook
+// events fire, the caller degrades like for any unusable key, and the run
+// exits non-zero.
 func (s *touchSigner) sign(rand io.Reader, data []byte, algorithm string) (*ssh.Signature, error) {
+	if st := s.cfg.State; st.Failed() {
+		return nil, fmt.Errorf("%w: an earlier security key wait already failed; not prompting again", ErrTouchTimeout)
+	}
 	s.mu.Lock()
 	action := s.action
 	s.mu.Unlock()
@@ -176,6 +221,11 @@ func (s *touchSigner) sign(rand io.Reader, data []byte, algorithm string) (*ssh.
 		r = <-resCh
 	}
 
+	if r.err != nil {
+		// The wait failed (timeout or error): latch the shared state so
+		// no later smartcard operation in this run prompts again.
+		s.cfg.State.latch()
+	}
 	if s.cfg.Hook != nil {
 		s.cfg.Hook.TouchEnd(touch.Event{
 			KeyPath:   s.cfg.KeyPath,

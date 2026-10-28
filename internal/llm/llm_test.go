@@ -101,6 +101,113 @@ func TestTruncateDiff_NoHeaders(t *testing.T) {
 	}
 }
 
+func TestSanitizePassesCleanTextThrough(t *testing.T) {
+	clean := "- fix the login race\n- tighten the token check\n\nBody text stays."
+	if got := Sanitize(clean); got != clean {
+		t.Fatalf("clean text must pass through unchanged, got:\n%q", got)
+	}
+}
+
+func TestSanitizeStripsThinkBlocks(t *testing.T) {
+	in := "<think>Let me look at the diff.\n</think>\n- fix the login race\n- tighten the token check"
+	want := "- fix the login race\n- tighten the token check"
+	if got := Sanitize(in); got != want {
+		t.Fatalf("thinking block not stripped, got:\n%q", got)
+	}
+}
+
+func TestSanitizeStripsMultipleThinkBlocks(t *testing.T) {
+	in := "<think>reasoning one</think>first<think>reasoning two</think>second"
+	want := "firstsecond"
+	if got := Sanitize(in); got != want {
+		t.Fatalf("multiple thinking blocks not stripped, got:\n%q", got)
+	}
+}
+
+func TestSanitizeStripsUnclosedThinkBlock(t *testing.T) {
+	// An opener without a closer: everything after it is reasoning.
+	in := "- fix the login race\n<think>The rest is private chain-of-thought..."
+	want := "- fix the login race"
+	if got := Sanitize(in); got != want {
+		t.Fatalf("unclosed thinking block not stripped, got:\n%q", got)
+	}
+}
+
+func TestSanitizeStripsOtherThinkingTagPairs(t *testing.T) {
+	cases := map[string]string{
+		"<thinking>secret</thinking>visible":     "visible",
+		"<|thinking|>secret<|/thinking|>visible": "visible",
+		"<|think|>secret<|/think|>visible":       "visible",
+		"<reasoning>secret</reasoning>visible":   "visible",
+	}
+	for in, want := range cases {
+		if got := Sanitize(in); got != want {
+			t.Errorf("Sanitize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSanitizeStripsPromptEchoLines(t *testing.T) {
+	in := "You are a git commit message assistant.\n" +
+		"Write a detailed commit message explaining what changed.\n" +
+		"DIFF STAT:\n" +
+		"  - main.go\n" +
+		"DIFF:\n" +
+		"- fix the login race\n" +
+		"- * Write a detailed commit message never mind\n" +
+		"Use plain markdown bullets. Be specific.\n" +
+		"Summarize the following git commit message into one TL;DR line\n"
+	want := "- main.go\n- fix the login race"
+	if got := Sanitize(in); got != want {
+		t.Fatalf("prompt echo lines not stripped, got:\n%q", got)
+	}
+}
+
+func TestSanitizeStripsLeadingTLDRLabel(t *testing.T) {
+	cases := map[string]string{
+		"TL;DR: fix the login race": "fix the login race",
+		"TL;DR fix the login race":  "fix the login race",
+		"tl;dr: fix the login race": "fix the login race",
+		"TLDR: fix the login race":  "fix the login race",
+		"TLDR fix the login race":   "fix the login race",
+		"fix the login race":        "fix the login race",
+	}
+	for in, want := range cases {
+		if got := Sanitize(in); got != want {
+			t.Errorf("Sanitize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSanitizeEmptyAndPureReasoning(t *testing.T) {
+	if got := Sanitize(""); got != "" {
+		t.Fatalf("empty input must stay empty, got %q", got)
+	}
+	if got := Sanitize("  \n  "); got != "" {
+		t.Fatalf("blank input must sanitize to empty, got %q", got)
+	}
+	if got := Sanitize("<think>all reasoning, no answer"); got != "" {
+		t.Fatalf("pure reasoning must sanitize to empty, got %q", got)
+	}
+	if got := Sanitize("You are a git commit message assistant.\nDIFF:\ndiff --git noise"); got != "diff --git noise" {
+		t.Fatalf("prompt echo without reasoning must strip markers only, got %q", got)
+	}
+}
+
+func TestSanitizeCombinedLeak(t *testing.T) {
+	// A reasoning model that thinks, then echoes the prompt scaffolding
+	// around its answer: only the answer survives.
+	in := "<think>\nDiff shows a login change.\n</think>\n" +
+		"DIFF STAT:\n" +
+		"DIFF:\n" +
+		"- fix the login race\n" +
+		"- tighten the token check"
+	want := "- fix the login race\n- tighten the token check"
+	if got := Sanitize(in); got != want {
+		t.Fatalf("combined leak not sanitized, got:\n%q", got)
+	}
+}
+
 func TestDetailPrompt_ContainsTruncatedDiff(t *testing.T) {
 	section := makeSection(300)
 	prompt := DetailPrompt(section, "  - file.txt")
