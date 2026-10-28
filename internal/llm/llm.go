@@ -73,6 +73,12 @@ var thinkingTags = [][2]string{
 	{"<|thinking|>", "<|/thinking|>"},
 	{"<|think|>", "<|/think|>"},
 	{"<reasoning>", "</reasoning>"},
+	// ChatML control-token format some OpenAI-compatible reasoning models
+	// emit inline in the message content: an analysis channel followed by
+	// an assistant turn on the final channel. The closer below is the
+	// final-channel marker; a leading "<|start|>assistant" riding between
+	// the two channels is inside the removed span.
+	{"<|channel|>analysis<|message|>", "<|channel|>final<|message|>"},
 }
 
 // promptEchoMarkers are the scaffolding phrases from DetailPrompt and
@@ -95,14 +101,79 @@ var promptEchoMarkers = []string{
 // every model answer before any of it can become the commit subject or body,
 // so neither the model's private reasoning nor omc's own prompt text can
 // leak into the commit history. Clean text passes through unchanged.
+//
+// Reasoning arrives inline in the message content for both backends
+// (streaming would not change that: the thinking tokens are part of the
+// content stream either way, and the channel markers can span chunk
+// boundaries, so the whole text has to be buffered before anything can be
+// emitted). Sanitize therefore runs once over each complete answer — the
+// detail body and the TL;DR both pass through it (see generateMessage in
+// cmd/omc) — and starts the surviving text at the END of the thinking
+// process: matched thinking blocks are removed, a bare end-of-thinking
+// marker (opener lost to truncation or chunking) cuts everything before
+// it, and stray ChatML fragments are wiped.
 func Sanitize(text string) string {
 	s := text
 	for _, tag := range thinkingTags {
 		s = stripTagBlocks(s, tag[0], tag[1])
 	}
+	s = startAfterThinking(s)
 	s = stripPromptEchoLines(s)
 	s = stripLeadingTLDR(s)
+	s = stripControlTokens(s)
 	return strings.TrimSpace(s)
+}
+
+// chatmlAssistant is the bare ChatML role turn that precedes the final
+// answer channel; see thinkingTags.
+const chatmlAssistant = "<|start|>assistant"
+
+// startAfterThinking cuts everything up to and including the LAST
+// end-of-thinking marker in s. Matched pairs were already removed by
+// stripTagBlocks, so a marker that survives means the opener was truncated
+// or chunked away: the text before the marker is still private reasoning,
+// and the answer starts at the end of the thinking process.
+func startAfterThinking(s string) string {
+	cut := -1
+	for _, tag := range thinkingTags {
+		if i := strings.LastIndex(s, tag[1]); i >= 0 {
+			cut = max(cut, i+len(tag[1]))
+		}
+	}
+	if i := strings.LastIndex(s, chatmlAssistant); i >= 0 {
+		cut = max(cut, i+len(chatmlAssistant))
+	}
+	if cut < 0 {
+		return s
+	}
+	return s[cut:]
+}
+
+// controlTokens are ChatML/role fragments that can survive the block
+// stripping and the answer-start cut (truncated responses, partial
+// markers). None has a legitimate place in a commit message. Longer tokens
+// are listed before their prefixes so stripping never leaves a dangling
+// suffix behind.
+var controlTokens = []string{
+	chatmlAssistant,
+	"<|start|>",
+	"<|channel|>analysis",
+	"<|channel|>final",
+	"<|channel|>",
+	"<|message|>",
+	"<|end|>",
+	"<|user|>",
+	"<|assistant|>",
+}
+
+// stripControlTokens removes every stray ChatML fragment from s. The
+// tokens are removed outright: they delimit the model's token stream, so
+// the surrounding whitespace already separates what remains.
+func stripControlTokens(s string) string {
+	for _, tok := range controlTokens {
+		s = strings.ReplaceAll(s, tok, "")
+	}
+	return s
 }
 
 // stripTagBlocks removes every opener..closer block from s. An opener with

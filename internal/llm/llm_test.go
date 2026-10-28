@@ -222,3 +222,52 @@ func firstN(s string, n int) string {
 	}
 	return s[:n]
 }
+
+// TestSanitizeStripsChatMLChannelThinking pins the ChatML control-token
+// format some OpenAI-compatible reasoning models emit inline in the message
+// content: an analysis channel followed by an assistant/final channel. Only
+// the final channel is the answer; everything before it is private
+// chain-of-thought that must never reach the commit message.
+func TestSanitizeStripsChatMLChannelThinking(t *testing.T) {
+	in := "<|channel|>analysis<|message|>The user asked: summarize the diff.\n" +
+		"We need to write a detailed commit message.\n" +
+		"Write in markdown bullet format.<|start|>assistant<|channel|>final<|message|>" +
+		"## Summary\n" +
+		"- **Removed** the stale checksum cache file.\n" +
+		"- Refreshes the Go checksum database on the next command."
+	want := "## Summary\n" +
+		"- **Removed** the stale checksum cache file.\n" +
+		"- Refreshes the Go checksum database on the next command."
+	if got := Sanitize(in); got != want {
+		t.Fatalf("chatml analysis channel not stripped, got:\n%q", got)
+	}
+}
+
+// TestSanitizeStartsAfterBareThinkingEndMarker covers responses whose
+// thinking opener was truncated or chunked away: only the end-of-thinking
+// marker survives. The answer starts at the END of the thinking process, so
+// everything up to (and including) the last marker is dropped, for the
+// ChatML final-channel marker and for a bare closing tag alike.
+func TestSanitizeStartsAfterBareThinkingEndMarker(t *testing.T) {
+	cases := map[string]string{
+		"leftover chain-of-thought tail<|channel|>final<|message|>real answer":                             "real answer",
+		"partial reasoning<|channel|>final<|message|>another thought<|channel|>final<|message|>the answer": "the answer",
+		"reasoning tail</think>real answer":                                                                "real answer",
+	}
+	for in, want := range cases {
+		if got := Sanitize(in); got != want {
+			t.Errorf("Sanitize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestSanitizeStripsResidualControlTokens: a sanitized answer must not leak
+// stray ChatML fragments (start/channel/message markers) that survived the
+// block stripping.
+func TestSanitizeStripsResidualControlTokens(t *testing.T) {
+	in := "before<|start|> middle <|message|>after"
+	want := "before middle after"
+	if got := Sanitize(in); got != want {
+		t.Fatalf("residual control tokens not stripped, got: %q", got)
+	}
+}

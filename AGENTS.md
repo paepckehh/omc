@@ -303,10 +303,22 @@ when the model forgot to mention it (`mentionLockfileUpdate`). Env
 overrides are exempt from both rules — they land verbatim by contract.
 
 Every LLM answer passes through `llm.Sanitize` before it can become
-subject or body: reasoning/thinking blocks (closed or unclosed) and
-echoed prompt scaffolding are stripped no matter which backend
-produced the text; an answer that sanitizes to nothing counts as
-empty and the next backend (or the default subject) takes over.
+subject or body, no matter which backend produced the text: matched
+reasoning/thinking blocks are removed (DeepSeek-style think tags,
+`<thinking>`-style tags, and the ChatML channel format
+`<|channel|>analysis<|message|> ... <|start|>assistant<|channel|>final<|message|>`
+some OpenAI-compatible models emit inline in the content — only the
+final channel is the answer); a bare end-of-thinking marker whose
+opener was truncated away cuts everything before it, so both the
+detail body and the TL;DR start at the END of the thinking process;
+stray ChatML fragments are wiped; echoed prompt scaffolding is
+stripped. Reasoning that a backend delivers in a structured field
+(`reasoning`, `reasoning_content`) never reaches omc at all — both
+clients read only the answer field. Streaming would not help: the
+thinking tokens are part of the content either way and markers can
+span chunk boundaries, so the complete answer is sanitized in one
+pass. An answer that sanitizes to nothing counts as empty and the
+next backend (or the default subject) takes over.
 
 ## Git identity
 
